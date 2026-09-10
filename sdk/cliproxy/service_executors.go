@@ -210,6 +210,7 @@ func baselineExecutorAuths() []*coreauth.Auth {
 		"kimi",
 		"kiro",
 		"xai",
+		"copilot",
 		"openai-compatibility",
 	}
 	auths := make([]*coreauth.Auth, 0, len(providers))
@@ -289,6 +290,8 @@ func (s *Service) registerExecutorForAuth(a *coreauth.Auth, forceReplace bool) {
 		return
 	case "antigravity":
 		s.coreManager.RegisterExecutor(executor.NewAntigravityExecutor(cfg))
+	case "copilot":
+		s.coreManager.RegisterExecutor(executor.NewCopilotExecutor(cfg))
 	case "claude":
 		s.coreManager.RegisterExecutor(executor.NewClaudeExecutor(cfg))
 	case "kimi":

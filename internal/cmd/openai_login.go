@@ -24,6 +24,9 @@ type LoginOptions struct {
 
 	// Prompt allows the caller to provide interactive input when needed.
 	Prompt func(prompt string) (string, error)
+
+	// ForceBrowser forces interactive browser OAuth flow, bypassing local credential detection.
+	ForceBrowser bool
 }
 
 // DoCodexLogin triggers the Codex OAuth flow through the shared authentication manager.
