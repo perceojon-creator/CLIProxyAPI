@@ -11,41 +11,74 @@ import (
 	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 )
 
-// kiroRefreshLead is the duration before token expiry when refresh should occur.
 var kiroRefreshLead = 5 * time.Minute
 
-// KiroAuthenticator imports the Kiro desktop session as a CLIProxyAPI credential.
-// Kiro has no browser OAuth flow of its own here: the desktop app (or an AWS SSO
-// login) already wrote a bearer token to disk, so login reads and validates it.
 type KiroAuthenticator struct{}
 
-// NewKiroAuthenticator constructs a new Kiro authenticator.
 func NewKiroAuthenticator() Authenticator {
 	return &KiroAuthenticator{}
 }
 
-// Provider returns the provider key for kiro.
 func (KiroAuthenticator) Provider() string {
 	return "kiro"
 }
 
-// RefreshLead returns the duration before token expiry when refresh should occur.
 func (KiroAuthenticator) RefreshLead() *time.Duration {
 	return &kiroRefreshLead
 }
 
-// Login resolves the local Kiro session and turns it into an auth record.
-func (a KiroAuthenticator) Login(_ context.Context, cfg *config.Config, _ *LoginOptions) (*coreauth.Auth, error) {
+func (a KiroAuthenticator) Login(ctx context.Context, cfg *config.Config, opts *LoginOptions) (*coreauth.Auth, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("cliproxy auth: configuration is required")
 	}
-
-	fmt.Println("Reading Kiro session...")
-	resolved, err := kiro.ResolveKiroAuth(nil)
+	if opts == nil {
+		opts = &LoginOptions{}
+	}
+	var resolved *kiro.KiroAuth
+	var err error
+	if !opts.NoBrowser {
+		if opts.Metadata != nil && opts.Metadata["profile_dir"] != "" {
+			profile := kiro.ChromeProfile{
+				ProfileDir: opts.Metadata["profile_dir"],
+				Email:      opts.Metadata["email"],
+				Name:       opts.Metadata["name"],
+			}
+			resolved, err = kiro.LoginWithGoogleProfile(ctx, cfg, profile)
+		} else {
+			resolved, err = kiro.LoginWithGoogle(ctx, cfg, false)
+		}
+		if err != nil {
+			resolved, err = kiro.ResolveKiroAuth(nil)
+		}
+	} else {
+		fmt.Println("Reading Kiro session...")
+		resolved, err = kiro.ResolveKiroAuth(nil)
+	}
 	if err != nil {
 		return nil, err
 	}
+	rec := BuildKiroAuthRecord(resolved)
+	fmt.Println("Kiro session imported successfully!")
+	return rec, nil
+}
 
+func (a KiroAuthenticator) LoginWithProfile(ctx context.Context, cfg *config.Config, profile kiro.ChromeProfile) (*coreauth.Auth, error) {
+	if cfg == nil {
+		return nil, fmt.Errorf("cliproxy auth: configuration is required")
+	}
+	resolved, err := kiro.LoginWithGoogleProfile(ctx, cfg, profile)
+	if err != nil {
+		return nil, err
+	}
+	rec := BuildKiroAuthRecord(resolved)
+	fmt.Println("Kiro session imported successfully!")
+	return rec, nil
+}
+
+func BuildKiroAuthRecord(resolved *kiro.KiroAuth) *coreauth.Auth {
+	if resolved == nil {
+		return nil
+	}
 	tokenStorage := kiro.NewTokenStorage(resolved)
 	metadata := map[string]any{
 		"type":          "kiro",
@@ -55,31 +88,43 @@ func (a KiroAuthenticator) Login(_ context.Context, cfg *config.Config, _ *Login
 		"auth_method":   resolved.AuthMethod,
 		"timestamp":     time.Now().UnixMilli(),
 	}
+	if strings.TrimSpace(resolved.Email) != "" {
+		metadata["email"] = strings.TrimSpace(resolved.Email)
+	}
 	if strings.TrimSpace(resolved.ProfileArn) != "" {
 		metadata["profile_arn"] = strings.TrimSpace(resolved.ProfileArn)
 	}
 	if tokenStorage != nil && tokenStorage.Expired != "" {
 		metadata["expired"] = tokenStorage.Expired
 	}
-
-	fileName := fmt.Sprintf("kiro-%d.json", time.Now().UnixMilli())
-
-	fmt.Println("Kiro session imported successfully!")
-
+	var fileName string
+	if strings.TrimSpace(resolved.Email) != "" {
+		safe := SanitizeEmailForFilename(resolved.Email)
+		fileName = fmt.Sprintf("kiro-%s.json", safe)
+	} else {
+		fileName = fmt.Sprintf("kiro-%d.json", time.Now().UnixMilli())
+	}
 	return &coreauth.Auth{
 		ID:       fileName,
-		Provider: a.Provider(),
+		Provider: "kiro",
 		FileName: fileName,
 		Label:    kiroLabel(resolved),
 		Storage:  tokenStorage,
 		Metadata: metadata,
-	}, nil
+	}
 }
 
-// kiroLabel derives a human-readable label from the resolved session.
+func SanitizeEmailForFilename(email string) string {
+	r := strings.NewReplacer("@", "-", ".", "-", "+", "-")
+	return r.Replace(strings.ToLower(strings.TrimSpace(email)))
+}
+
 func kiroLabel(resolved *kiro.KiroAuth) string {
 	if resolved == nil {
 		return "Kiro User"
+	}
+	if strings.TrimSpace(resolved.Email) != "" {
+		return fmt.Sprintf("Kiro (%s)", resolved.Email)
 	}
 	method := strings.TrimSpace(resolved.AuthMethod)
 	if method == "" {

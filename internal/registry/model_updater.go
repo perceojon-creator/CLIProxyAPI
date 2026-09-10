@@ -121,6 +121,8 @@ func tryRefreshModels(ctx context.Context, label string) {
 		return
 	}
 
+	preserveLocalOnlySections(oldData, parsed)
+
 	// Detect changes before updating store.
 	changed := detectChangedProviders(oldData, parsed)
 
@@ -136,6 +138,19 @@ func tryRefreshModels(ctx context.Context, label string) {
 
 	log.Infof("%s completed from %s, changes detected for providers: %v", label, url, changed)
 	notifyModelRefresh(changed)
+}
+
+// preserveLocalOnlySections keeps catalog sections that the remote payload does not ship.
+// Kiro is maintained locally and is absent from the upstream models.json, so a remote
+// refresh must not erase it. If the remote ever starts publishing a kiro section, that
+// section wins and normal change detection applies.
+func preserveLocalOnlySections(oldData, newData *staticModelsJSON) {
+	if oldData == nil || newData == nil {
+		return
+	}
+	if len(newData.Kiro) == 0 {
+		newData.Kiro = oldData.Kiro
+	}
 }
 
 // fetchModelsFromRemote tries all remote URLs and returns the parsed model catalog
@@ -214,6 +229,7 @@ func detectChangedProviders(oldData, newData *staticModelsJSON) []string {
 		{"codex", oldData.CodexPlus, newData.CodexPlus},
 		{"codex", oldData.CodexPro, newData.CodexPro},
 		{"kimi", oldData.Kimi, newData.Kimi},
+		{"kiro", oldData.Kiro, newData.Kiro},
 		{"antigravity", oldData.Antigravity, newData.Antigravity},
 		{"xai", oldData.XAI, newData.XAI},
 	}

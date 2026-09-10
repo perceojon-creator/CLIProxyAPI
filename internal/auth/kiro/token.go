@@ -29,6 +29,8 @@ type KiroTokenStorage struct {
 	AuthMethod string `json:"auth_method,omitempty"`
 	// Expired is the RFC3339 timestamp when the access token expires.
 	Expired string `json:"expired,omitempty"`
+	// Email is the Google or AWS account email associated with the credential.
+	Email string `json:"email,omitempty"`
 	// Type indicates the authentication provider type, always "kiro" for this storage.
 	Type string `json:"type"`
 
@@ -105,6 +107,7 @@ func NewTokenStorage(auth *KiroAuth) *KiroTokenStorage {
 		ProfileArn:   auth.ProfileArn,
 		Region:       auth.Region,
 		AuthMethod:   auth.AuthMethod,
+		Email:        auth.Email,
 		Type:         "kiro",
 	}
 	if auth.ExpiresAt > 0 {

@@ -34,6 +34,7 @@ type KiroAuth struct {
 	Region       string
 	ExpiresAt    int64  // Unix milliseconds
 	AuthMethod   string // "social" (Kiro desktop login) or "sso" (IAM Identity Center)
+	Email        string // Associated Google / AWS account email if known
 }
 
 type kiroTokenFile struct {
@@ -45,6 +46,7 @@ type kiroTokenFile struct {
 	AuthMethod   string `json:"authMethod"`
 	ClientID     string `json:"clientId"`
 	ClientSecret string `json:"clientSecret"`
+	Email        string `json:"email,omitempty"`
 }
 
 // KiroTokenPath returns the path to the Kiro desktop app token file.
