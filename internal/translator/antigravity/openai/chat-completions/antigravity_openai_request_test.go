@@ -531,3 +531,55 @@ func TestConvertOpenAIRequestToAntigravityPreservesToolResponseAsString(t *testi
 		t.Fatalf("expected %q, got %q", expected, got)
 	}
 }
+func TestConvertOpenAIRequestToAntigravityPreservesAuthenticThoughtSignature(t *testing.T) {
+	// Valid Google Tink HMAC signature base64
+	authenticSig := "EicKJQERTTIPdXBzdHJlYW0tYXV0aGVudGljLWhtYWMtMzgtZmxhc2g="
+
+	inputJSON := `{
+		"model": "gemini-3.8-flash",
+		"messages": [
+			{"role": "user", "content": "check system status"},
+			{
+				"role": "assistant",
+				"content": null,
+				"tool_calls": [{
+					"id": "call_sys_1",
+					"type": "function",
+					"function": {"name": "get_status", "arguments": "{}"},
+					"extra_content": {"google": {"thought_signature": "` + authenticSig + `"}}
+				}]
+			},
+			{"role": "tool", "tool_call_id": "call_sys_1", "content": "{"status":"healthy"}"}
+		]
+	}`
+
+	result := ConvertOpenAIRequestToAntigravity("gemini-3.8-flash", []byte(inputJSON), false)
+	sig := gjson.GetBytes(result, "request.contents.1.parts.0.thoughtSignature").String()
+	if sig != authenticSig {
+		t.Fatalf("expected authentic signature %q preserved on tool call, got %q", authenticSig, sig)
+	}
+
+	// Also verify that fallback sentinel is used ONLY when no signature is provided
+	inputWithoutSig := `{
+		"model": "gemini-3.8-flash",
+		"messages": [
+			{"role": "user", "content": "check system status"},
+			{
+				"role": "assistant",
+				"content": null,
+				"tool_calls": [{
+					"id": "call_sys_2",
+					"type": "function",
+					"function": {"name": "get_status", "arguments": "{}"}
+				}]
+			},
+			{"role": "tool", "tool_call_id": "call_sys_2", "content": "{"status":"healthy"}"}
+		]
+	}`
+
+	resultNoSig := ConvertOpenAIRequestToAntigravity("gemini-3.8-flash", []byte(inputWithoutSig), false)
+	sigNoSig := gjson.GetBytes(resultNoSig, "request.contents.1.parts.0.thoughtSignature").String()
+	if sigNoSig != antigravityFunctionThoughtSignature {
+		t.Fatalf("expected fallback sentinel %q, got %q", antigravityFunctionThoughtSignature, sigNoSig)
+	}
+}

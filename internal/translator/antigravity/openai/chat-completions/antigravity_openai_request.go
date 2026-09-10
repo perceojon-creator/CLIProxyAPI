@@ -5,6 +5,7 @@ package chat_completions
 import (
 	"strings"
 
+	sigcompat "github.com/router-for-me/CLIProxyAPI/v7/internal/signature"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/thinking"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/translator/antigravity/gemini"
 	translatorcommon "github.com/router-for-me/CLIProxyAPI/v7/internal/translator/common"
@@ -233,7 +234,7 @@ func ConvertOpenAIRequestToAntigravity(modelName string, inputRawJSON []byte, _ 
 				if reasoningContent := m.Get("reasoning_content"); reasoningContent.Type == gjson.String && reasoningContent.String() != "" {
 					part := antigravityOpenAITextPart(reasoningContent.String())
 					part, _ = sjson.SetBytes(part, "thought", true)
-					part, _ = sjson.SetBytes(part, "thoughtSignature", antigravityFunctionThoughtSignature)
+					part, _ = sjson.SetBytes(part, "thoughtSignature", antigravityOpenAIReasoningContentThoughtSignature(m))
 					partItems = append(partItems, part)
 				}
 				if content.Type == gjson.String && content.String() != "" {
@@ -280,7 +281,7 @@ func ConvertOpenAIRequestToAntigravity(modelName string, inputRawJSON []byte, _ 
 						} else {
 							part, _ = sjson.SetBytes(part, "functionCall.args.params", []byte(functionArgs))
 						}
-						part, _ = sjson.SetBytes(part, "thoughtSignature", antigravityFunctionThoughtSignature)
+						part, _ = sjson.SetBytes(part, "thoughtSignature", antigravityOpenAIToolCallThoughtSignature(tc, m))
 						partItems = append(partItems, part)
 						if functionID != "" {
 							functionIDs = append(functionIDs, functionID)
@@ -613,4 +614,40 @@ func setAntigravityOpenAIRawIfDifferent(out []byte, path string, value gjson.Res
 		return out
 	}
 	return updated
+}
+
+func antigravityOpenAIToolCallThoughtSignature(tc, m gjson.Result) string {
+	for _, path := range []string{
+		"extra_content.google.thought_signature",
+		"function.extra_content.google.thought_signature",
+		"thoughtSignature",
+		"thought_signature",
+	} {
+		if sig := tc.Get(path); sig.Exists() && sig.String() != "" {
+			return sigcompat.GeminiReplaySignatureOrBypass(sig.String(), sigcompat.SignatureBlockKindGeminiFunctionCall)
+		}
+	}
+	for _, path := range []string{
+		"extra_content.google.thought_signature",
+		"thoughtSignature",
+		"thought_signature",
+	} {
+		if sig := m.Get(path); sig.Exists() && sig.String() != "" {
+			return sigcompat.GeminiReplaySignatureOrBypass(sig.String(), sigcompat.SignatureBlockKindGeminiFunctionCall)
+		}
+	}
+	return antigravityFunctionThoughtSignature
+}
+
+func antigravityOpenAIReasoningContentThoughtSignature(m gjson.Result) string {
+	for _, path := range []string{
+		"extra_content.google.thought_signature",
+		"thoughtSignature",
+		"thought_signature",
+	} {
+		if sig := m.Get(path); sig.Exists() && sig.String() != "" {
+			return sigcompat.GeminiReplaySignatureOrBypass(sig.String(), sigcompat.SignatureBlockKindGeminiModelPart)
+		}
+	}
+	return antigravityFunctionThoughtSignature
 }

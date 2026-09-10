@@ -83,9 +83,10 @@ func (e *AntigravityExecutor) buildRequest(ctx context.Context, auth *cliproxyau
 		}
 
 		payloadStrBytes := applyAntigravityNativeSignatureReplayIfNeeded(modelName, []byte(payloadStr))
-		bodyReader = bytes.NewReader(payloadStrBytes)
+		payloadFinal := helps.AlignAntigravityWireEnvelope(payloadStrBytes)
+		bodyReader = bytes.NewReader(payloadFinal)
 		if e.cfg != nil && e.cfg.RequestLog {
-			payloadLog = append([]byte(nil), payloadStrBytes...)
+			payloadLog = append([]byte(nil), payloadFinal...)
 		}
 	} else {
 		if strings.Contains(modelName, "claude") {
@@ -95,9 +96,10 @@ func (e *AntigravityExecutor) buildRequest(ctx context.Context, auth *cliproxyau
 		}
 
 		payload = applyAntigravityNativeSignatureReplayIfNeeded(modelName, payload)
-		bodyReader = bytes.NewReader(payload)
+		payloadFinal := helps.AlignAntigravityWireEnvelope(payload)
+		bodyReader = bytes.NewReader(payloadFinal)
 		if e.cfg != nil && e.cfg.RequestLog {
-			payloadLog = append([]byte(nil), payload...)
+			payloadLog = append([]byte(nil), payloadFinal...)
 		}
 	}
 

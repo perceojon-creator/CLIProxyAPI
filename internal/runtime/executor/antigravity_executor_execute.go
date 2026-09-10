@@ -343,7 +343,16 @@ attemptLoop:
 				}
 			}
 			requestPayload = ensureAntigravityGeminiLeadingUserContent(baseModel, requestPayload)
-			httpReq, errReq := e.buildRequest(ctx, auth, token, baseModel, requestPayload, true, opts.Alt, baseURL, helps.DerivedAntigravitySessionID(opts.Metadata, req.Metadata))
+			sessionID := helps.DerivedAntigravitySessionID(opts.Metadata, req.Metadata)
+			projectID := ""
+			if auth != nil && auth.Metadata != nil {
+				if p, ok := auth.Metadata["project_id"].(string); ok {
+					projectID = p
+				}
+			}
+			helps.GetDefaultAntigravityRateSmoother().Smooth(ctx, sessionID)
+			helps.GetDefaultGhostTelemetryManager().RecordSessionActivity(sessionID, projectID, token)
+			httpReq, errReq := e.buildRequest(ctx, auth, token, baseModel, requestPayload, true, opts.Alt, baseURL, sessionID)
 			if errReq != nil {
 				err = errReq
 				return resp, err

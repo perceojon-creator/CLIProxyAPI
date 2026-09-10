@@ -11,9 +11,12 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"strings"
 	"time"
+
+	"golang.org/x/net/proxy"
 
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/cache"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
@@ -136,6 +139,18 @@ func defaultAntigravityBaseTransport() *http.Transport {
 	return &http.Transport{}
 }
 
+type antigravityDialContextWrapper struct {
+	dialContext func(ctx context.Context, network, addr string) (net.Conn, error)
+}
+
+func (w *antigravityDialContextWrapper) Dial(network, addr string) (net.Conn, error) {
+	return w.dialContext(context.Background(), network, addr)
+}
+
+func (w *antigravityDialContextWrapper) DialContext(ctx context.Context, network, addr string) (net.Conn, error) {
+	return w.dialContext(ctx, network, addr)
+}
+
 func cloneTransportWithHTTP11(base *http.Transport) *http.Transport {
 	if base == nil {
 		return nil
@@ -154,6 +169,14 @@ func cloneTransportWithHTTP11(base *http.Transport) *http.Transport {
 	// an empty NextProtos keeps the wire shape aligned while using HTTP/1.1.
 	clone.TLSClientConfig.NextProtos = nil
 	applyAntigravityPoolLimits(clone)
+
+	if clone.DialTLSContext == nil {
+		var dialer proxy.Dialer = proxy.Direct
+		if clone.DialContext != nil {
+			dialer = &antigravityDialContextWrapper{dialContext: clone.DialContext}
+		}
+		clone.DialTLSContext = helps.NewAntigravityDialTLSContext(dialer, clone.TLSClientConfig)
+	}
 	return clone
 }
 
@@ -227,7 +250,11 @@ func antigravityProxiedHTTP11Transport(auth *cliproxyauth.Auth, proxyURL string)
 		if base == nil {
 			return nil, fmt.Errorf("antigravity executor: proxy setting produced no transport")
 		}
-		return cloneTransportWithHTTP11(base), nil
+		clone := cloneTransportWithHTTP11(base)
+		if proxyDialer, mode, errDialer := proxyutil.BuildDialer(proxyURL); errDialer == nil && mode != proxyutil.ModeInherit && proxyDialer != nil {
+			clone.DialTLSContext = helps.NewAntigravityDialTLSContext(proxyDialer, clone.TLSClientConfig)
+		}
+		return clone, nil
 	})
 	if errGet != nil {
 		// The caller falls back to NewProxyAwareHTTPClient, which reports the failure
