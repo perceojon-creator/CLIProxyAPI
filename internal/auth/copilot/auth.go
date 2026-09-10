@@ -1,9 +1,9 @@
 package copilot
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
-	"bytes"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"

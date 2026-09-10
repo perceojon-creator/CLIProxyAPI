@@ -9,6 +9,7 @@ import (
 	"time"
 
 	copilotauth "github.com/router-for-me/CLIProxyAPI/v7/internal/auth/copilot"
+	kiroauth "github.com/router-for-me/CLIProxyAPI/v7/internal/auth/kiro"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/browser"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/misc"
@@ -64,7 +65,18 @@ func (CopilotAuthenticator) Login(ctx context.Context, cfg *config.Config, opts 
 
 		if !opts.NoBrowser {
 			fmt.Println("Opening browser for authorization...")
-			if browser.IsAvailable() {
+			profileDir := ""
+			if opts.Metadata != nil {
+				profileDir = opts.Metadata["profile_dir"]
+			}
+			if profileDir != "" {
+				if errChrome := kiroauth.OpenURLInChromeProfile(dcr.VerificationURI, profileDir); errChrome != nil {
+					log.Warnf("Failed to open Chrome profile %s: %v, falling back to default browser", profileDir, errChrome)
+					_ = browser.OpenURL(dcr.VerificationURI)
+				} else {
+					fmt.Printf("Opened Chrome with profile: %s\n", profileDir)
+				}
+			} else if browser.IsAvailable() {
 				if errOpen := browser.OpenURL(dcr.VerificationURI); errOpen != nil {
 					log.Warnf("Failed to open browser automatically: %v", errOpen)
 				}
@@ -245,6 +257,7 @@ func processCopilotTokens(ctx context.Context, authSvc *copilotauth.CopilotAuth,
 	fmt.Printf("GitHub Copilot authentication successful for %s (SKU: %s)\n", user, sku)
 	return BuildCopilotAuth(accessToken, copilotToken, user, email, sku, baseURL), nil
 }
+
 type copilotCallbackResult struct {
 	Code  string
 	Error string
