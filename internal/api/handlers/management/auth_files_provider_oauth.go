@@ -17,6 +17,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/auth/antigravity"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/auth/claude"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/auth/codex"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/auth/copilot"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/auth/kimi"
 	xaiauth "github.com/router-for-me/CLIProxyAPI/v7/internal/auth/xai"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/misc"
@@ -503,6 +504,181 @@ func (h *Handler) RequestAntigravityToken(c *gin.Context) {
 			fmt.Printf("Using GCP project: %s\n", util.HideAPIKey(projectID))
 		}
 		fmt.Println("You can now use Antigravity services through this CLI")
+	}()
+
+	c.JSON(200, gin.H{"status": "ok", "url": authURL, "state": state})
+}
+func (h *Handler) RequestCopilotToken(c *gin.Context) {
+	ctx := context.Background()
+	ctx = PopulateAuthContext(ctx, c)
+
+	fmt.Println("Initializing GitHub Copilot authentication...")
+
+	authSvc := copilot.NewCopilotAuth(h.cfg, nil)
+
+	state, errState := misc.GenerateRandomState()
+	if errState != nil {
+		log.Errorf("Failed to generate state parameter: %v", errState)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to generate state parameter"})
+		return
+	}
+
+	verifier, challenge, errPKCE := copilot.GeneratePKCE()
+	if errPKCE != nil {
+		log.Errorf("Failed to generate PKCE: %v", errPKCE)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to generate PKCE parameters"})
+		return
+	}
+
+	redirectURI := fmt.Sprintf("http://localhost:%d/oauth-callback", copilot.CallbackPort)
+	authURL := authSvc.BuildAuthURL(state, redirectURI, challenge)
+
+	RegisterOAuthSession(state, "copilot")
+
+	isWebUI := isWebUIRequest(c)
+	var forwarder *callbackForwarder
+	if isWebUI {
+		targetURL, errTarget := h.managementCallbackURL("/copilot/callback")
+		if errTarget != nil {
+			log.WithError(errTarget).Error("failed to compute copilot callback target")
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "callback server unavailable"})
+			return
+		}
+		var errStart error
+		if forwarder, errStart = startCallbackForwarder(copilot.CallbackPort, "copilot", targetURL); errStart != nil {
+			log.WithError(errStart).Error("failed to start copilot callback forwarder")
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to start callback server"})
+			return
+		}
+	}
+
+	go func() {
+		if isWebUI {
+			defer stopCallbackForwarderInstance(copilot.CallbackPort, forwarder)
+		}
+
+		waitFile := filepath.Join(h.cfg.AuthDir, fmt.Sprintf(".oauth-copilot-%s.oauth", state))
+		deadline := time.Now().Add(5 * time.Minute)
+		var authCode string
+		for {
+			if !IsOAuthSessionPending(state, "copilot") {
+				return
+			}
+			if time.Now().After(deadline) {
+				log.Error("copilot oauth flow timed out")
+				SetOAuthSessionError(state, "OAuth flow timed out")
+				return
+			}
+			if data, errReadFile := os.ReadFile(waitFile); errReadFile == nil {
+				var payload map[string]string
+				_ = json.Unmarshal(data, &payload)
+				_ = os.Remove(waitFile)
+				if errStr := strings.TrimSpace(payload["error"]); errStr != "" {
+					log.Errorf("Copilot authentication failed: %s", errStr)
+					SetOAuthSessionError(state, "Authentication failed")
+					return
+				}
+				if payloadState := strings.TrimSpace(payload["state"]); payloadState != "" && payloadState != state {
+					log.Errorf("Copilot authentication failed: state mismatch")
+					SetOAuthSessionError(state, "Authentication failed: state mismatch")
+					return
+				}
+				authCode = strings.TrimSpace(payload["code"])
+				if authCode == "" {
+					log.Error("Copilot authentication failed: code not found")
+					SetOAuthSessionError(state, "Authentication failed: code not found")
+					return
+				}
+				break
+			}
+			time.Sleep(500 * time.Millisecond)
+		}
+
+		tokenResp, errToken := authSvc.ExchangeCodeForTokens(ctx, authCode, redirectURI, verifier)
+		if errToken != nil {
+			log.Errorf("Copilot failed to exchange token: %v", errToken)
+			SetOAuthSessionError(state, "Failed to exchange token")
+			return
+		}
+
+		accessToken := strings.TrimSpace(tokenResp.AccessToken)
+		if accessToken == "" {
+			log.Error("copilot: token exchange returned empty access token")
+			SetOAuthSessionError(state, "Failed to exchange token")
+			return
+		}
+
+		user := ""
+		email := ""
+		if profile, errProfile := authSvc.FetchUserInfo(ctx, accessToken); errProfile == nil && profile != nil {
+			user = profile.Login
+			email = profile.Email
+		}
+
+		sku := ""
+		baseURL := copilot.DefaultUpstreamBaseURL
+		if copilotUser, errCU := authSvc.FetchCopilotUser(ctx, accessToken); errCU == nil && copilotUser != nil {
+			if user == "" {
+				user = copilotUser.Login
+			}
+			sku = copilotUser.AccessTypeSKU
+			if copilotUser.Endpoints.API != "" {
+				baseURL = copilotUser.Endpoints.API
+			}
+		}
+
+		copilotToken := ""
+		if sess, errSess := authSvc.FetchCopilotSession(ctx, accessToken); errSess == nil && sess != nil {
+			copilotToken = sess.Token
+			if sess.AccessTypeSKU != "" && sku == "" {
+				sku = sess.AccessTypeSKU
+			}
+			if apiEndpoint, ok := sess.Endpoints["api"]; ok && apiEndpoint != "" {
+				baseURL = apiEndpoint
+			}
+		}
+
+		ident := user
+		if ident == "" {
+			ident = email
+		}
+		if ident == "" {
+			ident = "copilot"
+		}
+
+		fileName := copilot.CredentialFileName(ident)
+		metadata := map[string]any{
+			"type":         "copilot",
+			"access_token": accessToken,
+			"user":         user,
+			"email":        email,
+			"sku":          sku,
+			"base_url":     baseURL,
+			"timestamp":    time.Now().UnixMilli(),
+		}
+		if copilotToken != "" {
+			metadata["copilot_token"] = copilotToken
+		}
+
+		record := &coreauth.Auth{
+			ID:       fileName,
+			Provider: "copilot",
+			FileName: fileName,
+			Label:    ident,
+			Metadata: metadata,
+		}
+		if errGuard := guardOAuthSessionPendingForSave(state, "copilot"); errGuard != nil {
+			return
+		}
+		savedPath, errSave := h.saveTokenRecord(ctx, record)
+		if errSave != nil {
+			log.Errorf("Failed to save token to file: %v", errSave)
+			SetOAuthSessionError(state, "Failed to save token to file")
+			return
+		}
+
+		CompleteOAuthSession(state)
+		fmt.Printf("Copilot authentication successful! Token saved to %s\n", savedPath)
 	}()
 
 	c.JSON(200, gin.H{"status": "ok", "url": authURL, "state": state})

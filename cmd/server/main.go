@@ -83,6 +83,9 @@ func main() {
 	var xaiLogin bool
 	var kiroLogin bool
 	var kiroLoginAll bool
+	var copilotLogin bool
+	var copilotLoginAll bool
+	var copilotBrowserLogin bool
 	var vertexImport string
 	var vertexImportPrefix string
 	var configPath string
@@ -104,6 +107,9 @@ func main() {
 	flag.BoolVar(&xaiLogin, "xai-login", false, "Login to xAI using OAuth")
 	flag.BoolVar(&kiroLogin, "kiro-login", false, "Login to Kiro using local session or Google account")
 	flag.BoolVar(&kiroLoginAll, "kiro-login-all", false, "Login to all detected Google Chrome profiles sequentially for Kiro")
+	flag.BoolVar(&copilotLogin, "copilot-login", false, "Login to GitHub Copilot subscription using OAuth, browser profiles, or local credentials")
+	flag.BoolVar(&copilotLoginAll, "copilot-login-all", false, "Login to all detected browser profiles sequentially for GitHub Copilot")
+	flag.BoolVar(&copilotBrowserLogin, "copilot-browser-login", false, "Force interactive browser OAuth login for GitHub Copilot (bypass local detection)")
 	flag.StringVar(&configPath, "config", DefaultConfigPath, "Configure File Path")
 	flag.StringVar(&vertexImport, "vertex-import", "", "Import Vertex service account key JSON file")
 	flag.StringVar(&vertexImportPrefix, "vertex-import-prefix", "", "Prefix for Vertex model namespacing (use with -vertex-import)")
@@ -592,7 +598,7 @@ func main() {
 		CallbackPort: oauthCallbackPort,
 	}
 
-	commandMode := vertexImport != "" || antigravityLogin || codexLogin || codexDeviceLogin || claudeLogin || kimiLogin || xaiLogin || kiroLogin || kiroLoginAll
+	commandMode := vertexImport != "" || antigravityLogin || codexLogin || codexDeviceLogin || claudeLogin || kimiLogin || xaiLogin || kiroLogin || kiroLoginAll || copilotLogin || copilotLoginAll || copilotBrowserLogin
 	cloudConfigMissing := isCloudDeploy && !configFileExists
 	homeMode := configLoadedFromHome || (cfg != nil && cfg.Home.Enabled)
 	exampleAPIKeySafeMode := shouldEnableExampleAPIKeySafeMode(cfg, commandMode, tuiMode, standalone, cloudConfigMissing, homeMode)
@@ -668,6 +674,11 @@ func main() {
 		cmd.DoXAILogin(cfg, options)
 	} else if kiroLogin || kiroLoginAll {
 		cmd.DoKiroLogin(cfg, options, kiroLoginAll)
+	} else if copilotLogin || copilotLoginAll || copilotBrowserLogin {
+		if copilotBrowserLogin {
+			options.ForceBrowser = true
+		}
+		cmd.DoCopilotLogin(cfg, options, copilotLoginAll)
 	} else {
 		// In cloud deploy mode without config file, just wait for shutdown signals
 		if isCloudDeploy && !configFileExists {

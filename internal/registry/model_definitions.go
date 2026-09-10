@@ -34,6 +34,7 @@ type staticModelsJSON struct {
 	Kiro        []*ModelInfo `json:"kiro"`
 	Antigravity []*ModelInfo `json:"antigravity"`
 	XAI         []*ModelInfo `json:"xai"`
+	Copilot     []*ModelInfo `json:"copilot"`
 }
 
 // GetClaudeModels returns the standard Claude model definitions.
@@ -89,6 +90,11 @@ func GetKiroModels() []*ModelInfo {
 // GetAntigravityModels returns the standard Antigravity model definitions.
 func GetAntigravityModels() []*ModelInfo {
 	return cloneModelInfos(getModels().Antigravity)
+}
+
+// GetCopilotModels returns the standard GitHub Copilot model definitions.
+func GetCopilotModels() []*ModelInfo {
+	return cloneModelInfos(getModels().Copilot)
 }
 
 // AntigravityWebSearchModelFor returns the Antigravity model that should run a
@@ -381,6 +387,8 @@ func GetStaticModelDefinitionsByChannel(channel string) []*ModelInfo {
 		return GetAntigravityModels()
 	case "xai", "x-ai", "grok":
 		return GetXAIModels()
+	case "copilot", "github-copilot":
+		return GetCopilotModels()
 	default:
 		return nil
 	}
@@ -404,6 +412,7 @@ func LookupStaticModelInfo(modelID string) *ModelInfo {
 		data.Kiro,
 		data.Antigravity,
 		data.XAI,
+		data.Copilot,
 	}
 	for _, models := range allModels {
 		for _, m := range models {
