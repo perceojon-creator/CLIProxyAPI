@@ -321,7 +321,65 @@ func (a *CopilotAuth) FetchCopilotUser(ctx context.Context, token string) (*Copi
 	if err = json.NewDecoder(resp.Body).Decode(&res); err != nil {
 		return nil, fmt.Errorf("copilot: decode copilot user response: %w", err)
 	}
+	if res.AccessTypeSKU == "no_access" {
+		_ = a.SubscribeLimitedUser(ctx, token)
+		if retryRes, errRetry := a.fetchCopilotUserRaw(ctx, token); errRetry == nil && retryRes != nil {
+			return retryRes, nil
+		}
+	}
 	return &res, nil
+}
+
+func (a *CopilotAuth) fetchCopilotUserRaw(ctx context.Context, token string) (*CopilotUserResponse, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, CopilotInternalUserURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "token "+strings.TrimSpace(token))
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("User-Agent", DefaultUserAgent)
+
+	resp, err := a.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("status %d", resp.StatusCode)
+	}
+	var res CopilotUserResponse
+	if err = json.NewDecoder(resp.Body).Decode(&res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+// SubscribeLimitedUser enrolls a GitHub user into the free limited Copilot tier if eligible.
+func (a *CopilotAuth) SubscribeLimitedUser(ctx context.Context, token string) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	body := []byte(`{"restricted_telemetry":"enabled","public_code_suggestions":"enabled"}`)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://api.github.com/copilot_internal/subscribe_limited_user", bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "token "+strings.TrimSpace(token))
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", DefaultUserAgent)
+	req.Header.Set("X-GitHub-Api-Version", "2025-05-01")
+
+	resp, err := a.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	return nil
 }
 
 // FetchCopilotSession exchanges a GitHub token for a short-lived Copilot session token from /copilot_internal/v2/token.
