@@ -91,16 +91,3 @@ func TestFetchCopilotUserMock(t *testing.T) {
 		t.Errorf("unexpected user: %+v", user)
 	}
 }
-
-func TestDetectLocalCredentialsOnHost(t *testing.T) {
-	cfg := &config.Config{}
-	token, user, sku, baseURL, err := DetectLocalCredentials(context.Background(), cfg)
-	if err != nil {
-		t.Logf("no local credentials: %v", err)
-		return
-	}
-	t.Logf("Found local credentials on host: user=%s, sku=%s, baseURL=%s, tokenLen=%d", user, sku, baseURL, len(token))
-	if token == "" {
-		t.Errorf("expected non-empty token")
-	}
-}

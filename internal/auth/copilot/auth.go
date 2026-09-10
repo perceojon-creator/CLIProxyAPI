@@ -227,7 +227,6 @@ func (a *CopilotAuth) ExchangeCodeForTokens(ctx context.Context, code, redirectU
 	}
 	data := url.Values{}
 	data.Set("client_id", ClientID)
-	data.Set("client_secret", ClientSecret)
 	data.Set("code", strings.TrimSpace(code))
 	data.Set("redirect_uri", strings.TrimSpace(redirectURI))
 	if codeVerifier != "" {

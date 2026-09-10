@@ -52,7 +52,7 @@ func (CopilotAuthenticator) Login(ctx context.Context, cfg *config.Config, opts 
 		if localToken, localUser, localSKU, localBaseURL, errLocal := copilotauth.DetectLocalCredentials(ctx, cfg); errLocal == nil && localToken != "" {
 			log.Infof("copilot: using active local credentials for %s (SKU: %s)", localUser, localSKU)
 			fmt.Printf("Detected active GitHub Copilot credentials for %s (SKU: %s)\n", localUser, localSKU)
-			return BuildCopilotAuth(localToken, "", localUser, "", localSKU, localBaseURL), nil
+			return BuildCopilotAuth(localToken, "", localUser, "", localSKU, localBaseURL, 0), nil
 		}
 	}
 
@@ -244,8 +244,10 @@ func processCopilotTokens(ctx context.Context, authSvc *copilotauth.CopilotAuth,
 	}
 
 	copilotToken := ""
+	expiresAt := int64(0)
 	if session, errSess := authSvc.FetchCopilotSession(ctx, accessToken); errSess == nil && session != nil {
 		copilotToken = session.Token
+		expiresAt = session.ExpiresAt
 		if session.AccessTypeSKU != "" && sku == "" {
 			sku = session.AccessTypeSKU
 		}
@@ -255,7 +257,7 @@ func processCopilotTokens(ctx context.Context, authSvc *copilotauth.CopilotAuth,
 	}
 
 	fmt.Printf("GitHub Copilot authentication successful for %s (SKU: %s)\n", user, sku)
-	return BuildCopilotAuth(accessToken, copilotToken, user, email, sku, baseURL), nil
+	return BuildCopilotAuth(accessToken, copilotToken, user, email, sku, baseURL, expiresAt), nil
 }
 
 type copilotCallbackResult struct {
@@ -268,10 +270,10 @@ func startCopilotCallbackServer(port int) (*http.Server, int, <-chan copilotCall
 	if port <= 0 {
 		port = copilotauth.CallbackPort
 	}
-	addr := fmt.Sprintf(":%d", port)
+	addr := fmt.Sprintf("127.0.0.1:%d", port)
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {
-		listener, err = net.Listen("tcp", ":0")
+		listener, err = net.Listen("tcp", "127.0.0.1:0")
 		if err != nil {
 			return nil, 0, nil, err
 		}
@@ -301,7 +303,11 @@ func startCopilotCallbackServer(port int) (*http.Server, int, <-chan copilotCall
 		}
 	})
 
-	srv := &http.Server{Handler: mux}
+	srv := &http.Server{
+		Handler:           mux,
+		ReadHeaderTimeout: 5 * time.Second,
+		WriteTimeout:      5 * time.Second,
+	}
 	go func() {
 		if errServe := srv.Serve(listener); errServe != nil && errServe != http.ErrServerClosed {
 			log.Warnf("copilot callback server error: %v", errServe)
@@ -312,7 +318,7 @@ func startCopilotCallbackServer(port int) (*http.Server, int, <-chan copilotCall
 }
 
 // BuildCopilotAuth creates the canonical Auth record for Copilot.
-func BuildCopilotAuth(accessToken, copilotToken, user, email, sku, baseURL string) *coreauth.Auth {
+func BuildCopilotAuth(accessToken, copilotToken, user, email, sku, baseURL string, expiresAt int64) *coreauth.Auth {
 	ident := strings.TrimSpace(user)
 	if ident == "" {
 		ident = strings.TrimSpace(email)
@@ -334,24 +340,31 @@ func BuildCopilotAuth(accessToken, copilotToken, user, email, sku, baseURL strin
 		"base_url":     baseURL,
 		"timestamp":    time.Now().UnixMilli(),
 	}
+	attrs := map[string]string{
+		"access_token":  accessToken,
+		"copilot_token": copilotToken,
+		"user":          user,
+		"email":         email,
+		"sku":           sku,
+		"base_url":      baseURL,
+	}
 	if copilotToken != "" {
 		metadata["copilot_token"] = copilotToken
 	}
+	if expiresAt > 0 {
+		exp := time.Unix(expiresAt, 0).UTC().Format(time.RFC3339)
+		metadata["expired"] = exp
+		metadata["expires_at"] = expiresAt
+		attrs["expired"] = exp
+	}
 
 	return &coreauth.Auth{
-		ID:       fileName,
-		Provider: "copilot",
-		FileName: fileName,
-		Label:    ident,
-		Status:   coreauth.StatusActive,
-		Metadata: metadata,
-		Attributes: map[string]string{
-			"access_token":  accessToken,
-			"copilot_token": copilotToken,
-			"user":          user,
-			"email":         email,
-			"sku":           sku,
-			"base_url":      baseURL,
-		},
+		ID:         fileName,
+		Provider:   "copilot",
+		FileName:   fileName,
+		Label:      ident,
+		Status:     coreauth.StatusActive,
+		Metadata:   metadata,
+		Attributes: attrs,
 	}
 }

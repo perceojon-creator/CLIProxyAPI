@@ -5,12 +5,11 @@ import "time"
 // OAuth client credentials and configuration for GitHub Copilot CLI.
 const (
 	ClientID     = "Ov23ctDVkRmgkPke0Mmm"
-	ClientSecret = "68bbd667b6f1e954c1ab457717c147f221147eba"
 	CallbackPort = 51122
 )
 
-// DefaultOAuthScopes are the standard scopes for Copilot CLI operations.
-const DefaultOAuthScopes = "read:user,read:org,repo,gist,codespace"
+// DefaultOAuthScopes provides the minimal required scope for GitHub Copilot subscription access.
+const DefaultOAuthScopes = "read:user"
 
 // OAuth2 endpoints for GitHub authentication
 const (

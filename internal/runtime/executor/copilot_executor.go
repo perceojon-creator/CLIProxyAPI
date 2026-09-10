@@ -39,6 +39,23 @@ func NewCopilotExecutor(cfg *config.Config) *CopilotExecutor {
 // Identifier returns "copilot".
 func (e *CopilotExecutor) Identifier() string { return "copilot" }
 
+func copilotOAuthToken(auth *cliproxyauth.Auth) string {
+	if auth == nil {
+		return ""
+	}
+	if auth.Attributes != nil {
+		if t, ok := auth.Attributes["access_token"]; ok && strings.TrimSpace(t) != "" {
+			return strings.TrimSpace(t)
+		}
+	}
+	if auth.Metadata != nil {
+		if t, ok := auth.Metadata["access_token"].(string); ok && strings.TrimSpace(t) != "" {
+			return strings.TrimSpace(t)
+		}
+	}
+	return ""
+}
+
 func copilotCreds(auth *cliproxyauth.Auth) (token string, baseURL string) {
 	if auth == nil {
 		return "", copilotauth.DefaultUpstreamBaseURL
@@ -62,15 +79,8 @@ func copilotCreds(auth *cliproxyauth.Auth) (token string, baseURL string) {
 			token = strings.TrimSpace(t)
 		}
 	}
-	if token == "" && auth.Attributes != nil {
-		if t, ok := auth.Attributes["access_token"]; ok && strings.TrimSpace(t) != "" {
-			token = strings.TrimSpace(t)
-		}
-	}
-	if token == "" && auth.Metadata != nil {
-		if t, ok := auth.Metadata["access_token"].(string); ok && strings.TrimSpace(t) != "" {
-			token = strings.TrimSpace(t)
-		}
+	if token == "" {
+		token = copilotOAuthToken(auth)
 	}
 	return token, baseURL
 }
@@ -131,7 +141,7 @@ func (e *CopilotExecutor) CountTokens(ctx context.Context, auth *cliproxyauth.Au
 	return cliproxyexecutor.Response{}, nil
 }
 
-// Refresh refreshes the Copilot session token and verifies entitlements.
+// Refresh refreshes the Copilot session token and verifies entitlements using a cloned instance to prevent data races.
 func (e *CopilotExecutor) Refresh(ctx context.Context, auth *cliproxyauth.Auth) (*cliproxyauth.Auth, error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -139,39 +149,52 @@ func (e *CopilotExecutor) Refresh(ctx context.Context, auth *cliproxyauth.Auth) 
 	if auth == nil {
 		return nil, fmt.Errorf("copilot executor: auth is nil")
 	}
-	token, _ := copilotCreds(auth)
-	if token == "" {
-		return auth, fmt.Errorf("copilot executor: empty token for refresh")
+
+	// Always use the OAuth access token to query GitHub Copilot internal endpoints
+	oauthToken := copilotOAuthToken(auth)
+	if oauthToken == "" {
+		return auth, fmt.Errorf("copilot executor: empty oauth access token for refresh")
 	}
 
-	res, errRefresh, _ := copilotRefreshGroup.Do(token, func() (any, error) {
+	res, errRefresh, _ := copilotRefreshGroup.Do(oauthToken, func() (any, error) {
 		authSvc := copilotauth.NewCopilotAuth(e.cfg, nil)
-		// Check subscription status
-		userRes, errUser := authSvc.FetchCopilotUser(ctx, token)
+		userRes, errUser := authSvc.FetchCopilotUser(ctx, oauthToken)
 		if errUser != nil {
 			return nil, fmt.Errorf("copilot refresh failed: %w", errUser)
 		}
-		if auth.Attributes == nil {
-			auth.Attributes = make(map[string]string)
+
+		// Clone the auth instance to prevent concurrent map read/write fatal errors
+		updated := auth.Clone()
+		if updated.Attributes == nil {
+			updated.Attributes = make(map[string]string)
 		}
-		if auth.Metadata == nil {
-			auth.Metadata = make(map[string]any)
+		if updated.Metadata == nil {
+			updated.Metadata = make(map[string]any)
 		}
+
 		if userRes.Endpoints.API != "" {
-			auth.Attributes["base_url"] = userRes.Endpoints.API
-			auth.Metadata["base_url"] = userRes.Endpoints.API
+			updated.Attributes["base_url"] = userRes.Endpoints.API
+			updated.Metadata["base_url"] = userRes.Endpoints.API
 		}
 		if userRes.AccessTypeSKU != "" {
-			auth.Attributes["sku"] = userRes.AccessTypeSKU
-			auth.Metadata["sku"] = userRes.AccessTypeSKU
+			updated.Attributes["sku"] = userRes.AccessTypeSKU
+			updated.Metadata["sku"] = userRes.AccessTypeSKU
 		}
-		if sess, errSess := authSvc.FetchCopilotSession(ctx, token); errSess == nil && sess != nil && sess.Token != "" {
-			auth.Attributes["copilot_token"] = sess.Token
-			auth.Metadata["copilot_token"] = sess.Token
+
+		if sess, errSess := authSvc.FetchCopilotSession(ctx, oauthToken); errSess == nil && sess != nil && sess.Token != "" {
+			updated.Attributes["copilot_token"] = sess.Token
+			updated.Metadata["copilot_token"] = sess.Token
+			if sess.ExpiresAt > 0 {
+				exp := time.Unix(sess.ExpiresAt, 0).UTC().Format(time.RFC3339)
+				updated.Metadata["expired"] = exp
+				updated.Attributes["expired"] = exp
+			}
 		}
-		auth.LastRefreshedAt = time.Now()
-		return auth, nil
+
+		updated.LastRefreshedAt = time.Now()
+		return updated, nil
 	})
+
 	if errRefresh != nil {
 		return auth, errRefresh
 	}
@@ -205,7 +228,7 @@ func (e *CopilotExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, 
 		return resp, fmt.Errorf("copilot executor: failed to set model in payload: %w", err)
 	}
 
-	body, err = helps.ApplyThinkingWithSourcePayload(body, req.Payload, originalPayloadSource, req.Model, from.String(), "copilot", e.Identifier())
+	body, err = helps.ApplyThinkingWithSourcePayload(body, req.Payload, originalPayloadSource, req.Model, from.String(), to.String(), e.Identifier())
 	if err != nil {
 		return resp, err
 	}
@@ -303,7 +326,7 @@ func (e *CopilotExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.
 		return nil, fmt.Errorf("copilot executor: failed to set model in payload: %w", err)
 	}
 
-	body, err = helps.ApplyThinkingWithSourcePayload(body, req.Payload, originalPayloadSource, req.Model, from.String(), "copilot", e.Identifier())
+	body, err = helps.ApplyThinkingWithSourcePayload(body, req.Payload, originalPayloadSource, req.Model, from.String(), to.String(), e.Identifier())
 	if err != nil {
 		return nil, err
 	}
@@ -382,20 +405,23 @@ func (e *CopilotExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.
 				}
 			}
 		}
-		doneChunks := helps.TranslateStreamWithClaudeInputTokens(ctx, to, responseFormat, req.Model, opts.OriginalRequest, body, []byte("[DONE]"), &param, claudeInputTokens)
-		for i := range doneChunks {
-			select {
-			case out <- cliproxyexecutor.StreamChunk{Payload: doneChunks[i]}:
-			case <-ctx.Done():
-				return
-			}
-		}
+
+		// Only emit [DONE] if the stream finished cleanly without scanner/network errors
 		if errScan := scanner.Err(); errScan != nil {
 			helps.RecordAPIResponseError(ctx, e.cfg, errScan)
 			reporter.PublishFailure(ctx, errScan)
 			select {
 			case out <- cliproxyexecutor.StreamChunk{Err: errScan}:
 			case <-ctx.Done():
+			}
+		} else {
+			doneChunks := helps.TranslateStreamWithClaudeInputTokens(ctx, to, responseFormat, req.Model, opts.OriginalRequest, body, []byte("[DONE]"), &param, claudeInputTokens)
+			for i := range doneChunks {
+				select {
+				case out <- cliproxyexecutor.StreamChunk{Payload: doneChunks[i]}:
+				case <-ctx.Done():
+					return
+				}
 			}
 		}
 	}()
