@@ -7,6 +7,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	kiroauth "github.com/router-for-me/CLIProxyAPI/v7/internal/auth/kiro"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
@@ -144,8 +145,8 @@ func doLoginAllCopilotProfiles(cfg *config.Config, manager *sdkAuth.Manager, opt
 		}
 
 		if i < len(profiles)-1 {
-			fmt.Println("\nPresiona [Enter] para continuar con el siguiente perfil...")
-			_, _ = reader.ReadString(byte('\n'))
+			fmt.Println("\nAvanzando al siguiente perfil en 3 segundos...")
+			time.Sleep(3 * time.Second)
 		}
 	}
 
