@@ -37,6 +37,7 @@ type CLIOptions struct {
 	TUIMode                     bool
 	Standalone                  bool
 	LocalModel                  bool
+	Port                        int
 }
 
 // IsCommandMode returns true if any authentication, import, or sync command mode is active.
@@ -88,6 +89,7 @@ func RegisterFlags(fs *flag.FlagSet, opts *CLIOptions, defaultConfigPath string)
 	fs.BoolVar(&opts.TUIMode, "tui", false, "Start with terminal management UI")
 	fs.BoolVar(&opts.Standalone, "standalone", false, "In TUI mode, start an embedded local server")
 	fs.BoolVar(&opts.LocalModel, "local-model", false, "Use embedded models.json and codex_client_models.json only, skip remote model catalog fetching")
+	fs.IntVar(&opts.Port, "port", 0, "Server port")
 
 	fs.Usage = func() {
 		out := fs.Output()

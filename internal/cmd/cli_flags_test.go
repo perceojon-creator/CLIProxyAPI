@@ -53,6 +53,7 @@ func TestRegisterFlagsAndParsing(t *testing.T) {
 		"-no-browser",
 		"-oauth-callback-port", "9999",
 		"-config", "myconfig.yaml",
+		"--port", "8499",
 	})
 	if err != nil {
 		t.Fatalf("unexpected error parsing flags: %v", err)
@@ -66,6 +67,9 @@ func TestRegisterFlagsAndParsing(t *testing.T) {
 	}
 	if opts.OAuthCallbackPort != 9999 {
 		t.Fatalf("expected OAuthCallbackPort 9999, got %d", opts.OAuthCallbackPort)
+	}
+	if opts.Port != 8499 {
+		t.Fatalf("expected Port 8499, got %d", opts.Port)
 	}
 	if opts.ConfigPath != "myconfig.yaml" {
 		t.Fatalf("expected ConfigPath myconfig.yaml, got %s", opts.ConfigPath)

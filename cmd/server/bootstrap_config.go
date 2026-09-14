@@ -177,6 +177,9 @@ func bootstrapConfig(
 	if cfg == nil {
 		cfg = &config.Config{}
 	}
+	if cliOpts != nil && cliOpts.Port > 0 {
+		cfg.Port = cliOpts.Port
+	}
 
 	configFileExists := evaluateConfigFileExists(isCloudDeploy, configLoadedFromHome, configFilePath, cfg)
 	redisqueue.SetUsageStatisticsEnabled(cfg.UsageStatisticsEnabled)
