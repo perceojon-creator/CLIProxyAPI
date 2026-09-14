@@ -7,10 +7,12 @@ import (
 )
 
 const (
+	// GoogleFlowDomain is the official domain for Google Flow.
+	GoogleFlowDomain = "https://flow.google.com"
 	// FlowDomain is the primary Google Labs domain for Flow.
 	FlowDomain = "https://labs.google"
 	// FlowAppURL is the landing URL for the Google Flow workspace.
-	FlowAppURL = "https://labs.google/fx/tools/flow"
+	FlowAppURL = "https://flow.google.com"
 	// SessionCookieName is the standard NextAuth session cookie name on labs.google.
 	SessionCookieName = "__Secure-next-auth.session-token"
 	// CSRFCookieName is the standard NextAuth CSRF cookie name on labs.google.
@@ -28,6 +30,9 @@ var (
 type FlowAuth struct {
 	SessionToken string `json:"session_token"`
 	CSRFToken    string `json:"csrf_token,omitempty"`
+	Cookies      string `json:"cookies,omitempty"`
+	AtToken      string `json:"at_token,omitempty"`
+	ProjectID    string `json:"project_id,omitempty"`
 	Email        string `json:"email"`
 	Name         string `json:"name,omitempty"`
 	ProfileDir   string `json:"profile_dir,omitempty"`
@@ -37,10 +42,20 @@ type FlowAuth struct {
 
 // CookieHeader formats the session tokens into an HTTP Cookie header string.
 func (a *FlowAuth) CookieHeader() string {
-	if a == nil || strings.TrimSpace(a.SessionToken) == "" {
+	if a == nil {
 		return ""
 	}
-	header := fmt.Sprintf("%s=%s", SessionCookieName, strings.TrimSpace(a.SessionToken))
+	if strings.TrimSpace(a.Cookies) != "" {
+		return strings.TrimSpace(a.Cookies)
+	}
+	rawToken := strings.TrimSpace(a.SessionToken)
+	if rawToken == "" {
+		return ""
+	}
+	if strings.Contains(rawToken, "=") {
+		return rawToken
+	}
+	header := fmt.Sprintf("%s=%s", SessionCookieName, rawToken)
 	if strings.TrimSpace(a.CSRFToken) != "" {
 		header += fmt.Sprintf("; %s=%s", CSRFCookieName, strings.TrimSpace(a.CSRFToken))
 	}
@@ -49,7 +64,7 @@ func (a *FlowAuth) CookieHeader() string {
 
 // IsExpired checks if the session has expired.
 func (a *FlowAuth) IsExpired() bool {
-	if a == nil || strings.TrimSpace(a.SessionToken) == "" {
+	if a == nil || (strings.TrimSpace(a.SessionToken) == "" && strings.TrimSpace(a.Cookies) == "") {
 		return true
 	}
 	now := time.Now().UnixMilli()

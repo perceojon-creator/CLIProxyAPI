@@ -4,7 +4,9 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"net/url"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 
@@ -14,6 +16,38 @@ import (
 )
 
 const defaultSyncPort = 51122
+
+var (
+	reCookieHdr   = regexp.MustCompile(`(?i)-H\s+['"][Cc]ookie:\s*([^'"]+)['"]`)
+	reCookieFlag  = regexp.MustCompile(`(?i)(?:-b|--cookie)\s+['"]([^'"]+)['"]`)
+	reAtTokenForm = regexp.MustCompile(`at=([^&'"\s]+)`)
+)
+
+// ExtractCookiesFromInput parses cookies and at_token from a raw cURL command, Cookie header, or session token.
+func ExtractCookiesFromInput(input string) (cookies string, atToken string) {
+	input = strings.TrimSpace(input)
+	if strings.HasPrefix(strings.ToLower(input), "curl") || strings.Contains(input, " -H ") || strings.Contains(input, " -b ") {
+		if m := reCookieHdr.FindStringSubmatch(input); len(m) > 1 {
+			cookies = m[1]
+		} else if m := reCookieFlag.FindStringSubmatch(input); len(m) > 1 {
+			cookies = m[1]
+		}
+		if m := reAtTokenForm.FindStringSubmatch(input); len(m) > 1 {
+			if dec, err := url.QueryUnescape(m[1]); err == nil {
+				atToken = dec
+			} else {
+				atToken = m[1]
+			}
+		}
+	} else if strings.HasPrefix(strings.ToLower(input), "cookie:") {
+		cookies = strings.TrimSpace(input[7:])
+	} else if strings.Contains(input, "SID=") || strings.Contains(input, "SAPISID=") || strings.Contains(input, "__Secure-") {
+		cookies = input
+	} else {
+		cookies = input
+	}
+	return strings.TrimSpace(cookies), strings.TrimSpace(atToken)
+}
 
 // HarvestProfile guides authentication for a single Chrome profile and captures its session.
 func HarvestProfile(ctx context.Context, cfg *config.Config, profile *ChromeProfile, noBrowser bool) (*FlowAuth, error) {
@@ -55,8 +89,11 @@ func HarvestProfile(ctx context.Context, cfg *config.Config, profile *ChromeProf
 
 	fmt.Println("\nPuedes:")
 	fmt.Println(" 1. Iniciar sesion en la pestana abierta de Google Flow.")
-	fmt.Println(" 2. Pegar directamente aqui el valor de la cookie '__Secure-next-auth.session-token':")
-	fmt.Print("Token de sesion (o presiona Enter si usas la extension/sync): ")
+	fmt.Println(" 2. Pegar directamente aqui:")
+	fmt.Println("    - El comando cURL copiado desde DevTools ('Copy as cURL')")
+	fmt.Println("    - O el encabezado Cookie completo (Cookie: SID=...)")
+	fmt.Println("    - O la cookie de sesion")
+	fmt.Print("Pega aqui tu cURL o Cookies (o presiona Enter si usas bridge/sync): ")
 
 	inputChan := make(chan string, 1)
 	go func() {
@@ -68,29 +105,29 @@ func HarvestProfile(ctx context.Context, cfg *config.Config, profile *ChromeProf
 	select {
 	case <-ctx.Done():
 		return nil, ctx.Err()
-	case token := <-inputChan:
-		if token != "" {
-			// Strip cookie name prefix if user pasted full Cookie header
-			if strings.Contains(token, "=") {
-				parts := strings.Split(token, ";")
-				for _, p := range parts {
-					p = strings.TrimSpace(p)
-					if strings.HasPrefix(p, SessionCookieName+"=") {
-						token = strings.TrimPrefix(p, SessionCookieName+"=")
-						break
-					}
-				}
-			}
-			fmt.Println("Verificando token de sesion contra labs.google...")
+	case auth := <-syncServer.SyncedChan():
+		if auth != nil {
+			fmt.Printf("\nOK: Session received automatically via bridge for: %s (%s)\n", auth.Email, auth.Name)
+			return auth, nil
+		}
+		return nil, fmt.Errorf("invalid session received from bridge")
+	case rawInput := <-inputChan:
+		if rawInput != "" {
+			cookies, atToken := ExtractCookiesFromInput(rawInput)
 			profileDir := ""
 			email := ""
+			name := ""
 			if profile != nil {
 				profileDir = profile.ProfileDir
 				email = profile.Email
+				name = profile.Name
 			}
 			res, err := HandleSyncPayload(ctx, cfg, SyncRequest{
-				SessionToken: token,
+				Cookies:      cookies,
+				SessionToken: cookies,
+				AtToken:      atToken,
 				Email:        email,
+				Name:         name,
 				ProfileDir:   profileDir,
 			})
 			if err != nil {

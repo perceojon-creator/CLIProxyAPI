@@ -18,6 +18,9 @@ const refreshThresholdSeconds = 300
 type FlowTokenStorage struct {
 	SessionToken string         `json:"session_token"`
 	CSRFToken    string         `json:"csrf_token,omitempty"`
+	Cookies      string         `json:"cookies,omitempty"`
+	AtToken      string         `json:"at_token,omitempty"`
+	ProjectID    string         `json:"project_id,omitempty"`
 	Email        string         `json:"email,omitempty"`
 	Name         string         `json:"name,omitempty"`
 	ProfileDir   string         `json:"profile_dir,omitempty"`
@@ -88,10 +91,16 @@ func NewTokenStorage(auth *FlowAuth) *FlowTokenStorage {
 	ts := &FlowTokenStorage{
 		SessionToken: auth.SessionToken,
 		CSRFToken:    auth.CSRFToken,
+		Cookies:      auth.Cookies,
+		AtToken:      auth.AtToken,
+		ProjectID:    auth.ProjectID,
 		Email:        auth.Email,
 		Name:         auth.Name,
 		ProfileDir:   auth.ProfileDir,
 		Type:         "flow",
+	}
+	if ts.SessionToken == "" && ts.Cookies != "" {
+		ts.SessionToken = ts.Cookies
 	}
 	if auth.ExpiresAt > 0 {
 		ts.Expired = time.UnixMilli(auth.ExpiresAt).UTC().Format(time.RFC3339)
@@ -109,8 +118,8 @@ func ResolveFlowAuth(path string) (*FlowAuth, error) {
 	if err := json.Unmarshal(data, &storage); err != nil {
 		return nil, fmt.Errorf("unmarshaling flow auth: %w", err)
 	}
-	if strings.TrimSpace(storage.SessionToken) == "" {
-		return nil, fmt.Errorf("flow auth file %s has no session_token", path)
+	if strings.TrimSpace(storage.SessionToken) == "" && strings.TrimSpace(storage.Cookies) == "" {
+		return nil, fmt.Errorf("flow auth file %s has no session_token or cookies", path)
 	}
 	var expiresAt int64
 	if storage.Expired != "" {
@@ -118,9 +127,16 @@ func ResolveFlowAuth(path string) (*FlowAuth, error) {
 			expiresAt = t.UnixMilli()
 		}
 	}
+	sessToken := storage.SessionToken
+	if sessToken == "" {
+		sessToken = storage.Cookies
+	}
 	return &FlowAuth{
-		SessionToken: storage.SessionToken,
+		SessionToken: sessToken,
 		CSRFToken:    storage.CSRFToken,
+		Cookies:      storage.Cookies,
+		AtToken:      storage.AtToken,
+		ProjectID:    storage.ProjectID,
 		Email:        storage.Email,
 		Name:         storage.Name,
 		ProfileDir:   storage.ProfileDir,

@@ -18,6 +18,9 @@ import (
 type SyncRequest struct {
 	SessionToken string `json:"session_token"`
 	CSRFToken    string `json:"csrf_token,omitempty"`
+	Cookies      string `json:"cookies,omitempty"`
+	AtToken      string `json:"at_token,omitempty"`
+	ProjectID    string `json:"project_id,omitempty"`
 	Email        string `json:"email,omitempty"`
 	Name         string `json:"name,omitempty"`
 	ProfileDir   string `json:"profile_dir,omitempty"`
@@ -34,40 +37,52 @@ type SyncResult struct {
 
 // HandleSyncPayload validates and saves a Flow session token into the auth directory.
 func HandleSyncPayload(ctx context.Context, cfg *config.Config, req SyncRequest) (*SyncResult, error) {
+	cookies := strings.TrimSpace(req.Cookies)
 	token := strings.TrimSpace(req.SessionToken)
-	if token == "" {
-		return &SyncResult{OK: false, Message: "session_token is required"}, fmt.Errorf("session_token is empty")
+
+	if cookies == "" && token == "" {
+		return &SyncResult{OK: false, Message: "session_token or cookies is required"}, fmt.Errorf("session_token or cookies is empty")
 	}
 
-	// Verify session against labs.google
-	userInfo, errVerify := VerifyFlowSession(ctx, token, cfg)
-	if errVerify != nil {
-		return &SyncResult{OK: false, Message: errVerify.Error()}, fmt.Errorf("session verification failed: %w", errVerify)
+	if cookies == "" && strings.Contains(token, "=") {
+		cookies = token
+	}
+	if token == "" && cookies != "" {
+		token = cookies
 	}
 
-	email := strings.TrimSpace(userInfo.Email)
-	if email == "" {
-		email = strings.TrimSpace(req.Email)
+	email := strings.TrimSpace(req.Email)
+	name := strings.TrimSpace(req.Name)
+	var expiresAt int64
+
+	// If it's a simple NextAuth token without full cookie jar, try verifying against labs.google
+	if !strings.Contains(token, "=") {
+		userInfo, errVerify := VerifyFlowSession(ctx, token, cfg)
+		if errVerify == nil && userInfo != nil {
+			if email == "" {
+				email = strings.TrimSpace(userInfo.Email)
+			}
+			if name == "" {
+				name = strings.TrimSpace(userInfo.Name)
+			}
+			if userInfo.Expires != "" {
+				if t, err := time.Parse(time.RFC3339, userInfo.Expires); err == nil {
+					expiresAt = t.UnixMilli()
+				}
+			}
+		}
 	}
+
 	if email == "" {
 		return &SyncResult{OK: false, Message: "could not determine account email"}, fmt.Errorf("missing email in session")
-	}
-
-	name := strings.TrimSpace(userInfo.Name)
-	if name == "" {
-		name = strings.TrimSpace(req.Name)
-	}
-
-	var expiresAt int64
-	if userInfo.Expires != "" {
-		if t, err := time.Parse(time.RFC3339, userInfo.Expires); err == nil {
-			expiresAt = t.UnixMilli()
-		}
 	}
 
 	auth := &FlowAuth{
 		SessionToken: token,
 		CSRFToken:    strings.TrimSpace(req.CSRFToken),
+		Cookies:      cookies,
+		AtToken:      strings.TrimSpace(req.AtToken),
+		ProjectID:    strings.TrimSpace(req.ProjectID),
 		Email:        email,
 		Name:         name,
 		ProfileDir:   strings.TrimSpace(req.ProfileDir),
@@ -75,7 +90,6 @@ func HandleSyncPayload(ctx context.Context, cfg *config.Config, req SyncRequest)
 		UpdatedAt:    time.Now().UnixMilli(),
 	}
 
-	// Determine target save path
 	authDir := "auths"
 	if cfg != nil && strings.TrimSpace(cfg.AuthDir) != "" {
 		authDir = cfg.AuthDir
@@ -100,9 +114,10 @@ func HandleSyncPayload(ctx context.Context, cfg *config.Config, req SyncRequest)
 
 // SyncServer is a lightweight loopback HTTP server that receives credentials from browsers or extensions.
 type SyncServer struct {
-	server *http.Server
-	cfg    *config.Config
-	mu     sync.Mutex
+	server   *http.Server
+	cfg      *config.Config
+	onSynced chan *FlowAuth
+	mu       sync.Mutex
 }
 
 // NewSyncServer creates a new local sync server.
@@ -110,12 +125,15 @@ func NewSyncServer(cfg *config.Config, port int) *SyncServer {
 	if port <= 0 {
 		port = 51122
 	}
-	s := &SyncServer{cfg: cfg}
+	s := &SyncServer{
+		cfg:      cfg,
+		onSynced: make(chan *FlowAuth, 16),
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/auth/flow/sync", s.handleSync)
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("ok"))
+		_, _ = w.Write([]byte("OK"))
 	})
 	s.server = &http.Server{
 		Addr:    fmt.Sprintf("127.0.0.1:%d", port),
@@ -124,50 +142,67 @@ func NewSyncServer(cfg *config.Config, port int) *SyncServer {
 	return s
 }
 
+// SyncedChan returns a receive-only channel that emits FlowAuth whenever a session is received.
+func (s *SyncServer) SyncedChan() <-chan *FlowAuth {
+	return s.onSynced
+}
+
 func (s *SyncServer) handleSync(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
-	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 	if r.Method == http.MethodOptions {
-		w.WriteHeader(http.StatusOK)
+		w.WriteHeader(http.StatusNoContent)
 		return
 	}
 	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
 		return
 	}
+
 	var req SyncRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(SyncResult{OK: false, Message: "Invalid JSON body"})
 		return
 	}
+
 	result, err := HandleSyncPayload(r.Context(), s.cfg, req)
-	w.Header().Set("Content-Type", "application/json")
 	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)
 		_ = json.NewEncoder(w).Encode(result)
 		return
 	}
+	if s.onSynced != nil {
+		if auth, errResolve := ResolveFlowAuth(result.Path); errResolve == nil {
+			select {
+			case s.onSynced <- auth:
+			default:
+			}
+		}
+	}
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(result)
 }
 
-// Start begins listening in background.
+// Start launches the loopback sync server in the background.
 func (s *SyncServer) Start() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	go func() {
 		if err := s.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Errorf("flow sync server error: %v", err)
+			log.Errorf("flow: sync server error: %v", err)
 		}
 	}()
 	return nil
 }
 
-// Stop gracefully stops the server.
+// Stop gracefully shuts down the loopback sync server.
 func (s *SyncServer) Stop(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.server != nil {
-		return s.server.Shutdown(ctx)
+	if s.server == nil {
+		return nil
 	}
-	return nil
+	return s.server.Shutdown(ctx)
 }

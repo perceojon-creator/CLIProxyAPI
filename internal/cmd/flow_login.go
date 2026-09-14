@@ -5,8 +5,10 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
+	"syscall"
 
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/auth/flow"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
@@ -61,12 +63,7 @@ func DoFlowLogin(cfg *config.Config, options *LoginOptions, allProfiles bool) {
 	}
 
 	if choice == len(profiles)+1 {
-		server := flow.NewSyncServer(cfg, 51122)
-		fmt.Println("Iniciando servidor de sincronizacion en http://127.0.0.1:51122...")
-		fmt.Println("Presiona Enter para detener.")
-		_ = server.Start()
-		_, _ = reader.ReadString('\n')
-		_ = server.Stop(context.Background())
+		StartFlowSyncServer(cfg)
 		return
 	}
 
@@ -135,4 +132,31 @@ func doLoginAllFlowProfiles(cfg *config.Config, manager *sdkAuth.Manager, option
 	fmt.Println("\n=======================================================")
 	fmt.Printf("   Resumen: %d/%d cuentas de Google Flow autenticadas exitosamente.\n", successCount, len(profiles))
 	fmt.Println("=======================================================")
+}
+
+// StartFlowSyncServer runs the sync bridge persistently until interrupted.
+func StartFlowSyncServer(cfg *config.Config) {
+	server := flow.NewSyncServer(cfg, 51122)
+	fmt.Println("\n=======================================================")
+	fmt.Println("   Google Flow — Servidor de Sincronizacion (Bridge)")
+	fmt.Println("   Escuchando en: http://127.0.0.1:51122/auth/flow/sync")
+	fmt.Println("   Esperando sesiones de Google Flow...")
+	fmt.Println("=======================================================")
+	_ = server.Start()
+
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+
+	for {
+		select {
+		case <-sigChan:
+			fmt.Println("\nDeteniendo servidor de sincronizacion...")
+			_ = server.Stop(context.Background())
+			return
+		case auth := <-server.SyncedChan():
+			if auth != nil {
+				fmt.Printf("\n[+] SESION GUARDADA EXITOSAMENTE: %s (%s)\n", auth.Email, auth.Name)
+			}
+		}
+	}
 }
