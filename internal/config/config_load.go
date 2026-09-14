@@ -186,6 +186,9 @@ func LoadConfigOptional(configFile string, optional bool) (*Config, error) {
 	// Validate raw payload rules and drop invalid entries.
 	cfg.SanitizePayloadRules()
 
+	// Inject and prioritize API keys defined via environment variables / .env.
+	cfg.applyEnvironmentAPIKeys()
+
 	// Return the populated configuration struct.
 	return &cfg, nil
 }

@@ -86,6 +86,9 @@ func main() {
 	var copilotLogin bool
 	var copilotLoginAll bool
 	var copilotBrowserLogin bool
+	var flowLogin bool
+	var flowLoginAll bool
+	var flowSync bool
 	var vertexImport string
 	var vertexImportPrefix string
 	var configPath string
@@ -110,6 +113,9 @@ func main() {
 	flag.BoolVar(&copilotLogin, "copilot-login", false, "Login to GitHub Copilot subscription using OAuth, browser profiles, or local credentials")
 	flag.BoolVar(&copilotLoginAll, "copilot-login-all", false, "Login to all detected browser profiles sequentially for GitHub Copilot")
 	flag.BoolVar(&copilotBrowserLogin, "copilot-browser-login", false, "Force interactive browser OAuth login for GitHub Copilot (bypass local detection)")
+	flag.BoolVar(&flowLogin, "flow-login", false, "Login to Google Flow using browser session or Google account")
+	flag.BoolVar(&flowLoginAll, "flow-login-all", false, "Login to all detected Google Chrome profiles sequentially for Google Flow")
+	flag.BoolVar(&flowSync, "flow-sync", false, "Start Google Flow local sync bridge server")
 	flag.StringVar(&configPath, "config", DefaultConfigPath, "Configure File Path")
 	flag.StringVar(&vertexImport, "vertex-import", "", "Import Vertex service account key JSON file")
 	flag.StringVar(&vertexImportPrefix, "vertex-import-prefix", "", "Prefix for Vertex model namespacing (use with -vertex-import)")
@@ -598,7 +604,7 @@ func main() {
 		CallbackPort: oauthCallbackPort,
 	}
 
-	commandMode := vertexImport != "" || antigravityLogin || codexLogin || codexDeviceLogin || claudeLogin || kimiLogin || xaiLogin || kiroLogin || kiroLoginAll || copilotLogin || copilotLoginAll || copilotBrowserLogin
+	commandMode := vertexImport != "" || antigravityLogin || codexLogin || codexDeviceLogin || claudeLogin || kimiLogin || xaiLogin || kiroLogin || kiroLoginAll || copilotLogin || copilotLoginAll || copilotBrowserLogin || flowLogin || flowLoginAll || flowSync
 	cloudConfigMissing := isCloudDeploy && !configFileExists
 	homeMode := configLoadedFromHome || (cfg != nil && cfg.Home.Enabled)
 	exampleAPIKeySafeMode := shouldEnableExampleAPIKeySafeMode(cfg, commandMode, tuiMode, standalone, cloudConfigMissing, homeMode)
@@ -679,6 +685,10 @@ func main() {
 			options.ForceBrowser = true
 		}
 		cmd.DoCopilotLogin(cfg, options, copilotLoginAll)
+	} else if flowSync {
+		cmd.StartFlowSyncServer(cfg)
+	} else if flowLogin || flowLoginAll {
+		cmd.DoFlowLogin(cfg, options, flowLoginAll)
 	} else {
 		// In cloud deploy mode without config file, just wait for shutdown signals
 		if isCloudDeploy && !configFileExists {

@@ -247,6 +247,9 @@ func prepareAntigravityGeminiReasoningReplayPayload(ctx context.Context, modelNa
 		logAntigravityReasoningReplayDegraded(scope, "read", errReplay)
 		updated = payload
 	}
+	if opts.SourceFormat.String() == "openai-responses" {
+		updated = repairAntigravityGeminiFunctionResponseIDs(updated)
+	}
 	updated = normalizeAntigravityGeminiFunctionResponseRoles(updated)
 	if antigravityPayloadHasClaudeToolProvenanceID(updated) {
 		// The replay ledger could not resolve every tool ID — the session lane

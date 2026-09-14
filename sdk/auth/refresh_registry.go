@@ -14,6 +14,7 @@ func init() {
 	registerRefreshLead("kiro", func() Authenticator { return NewKiroAuthenticator() })
 	registerRefreshLead("xai", func() Authenticator { return NewXAIAuthenticator() })
 	registerRefreshLead("copilot", func() Authenticator { return NewCopilotAuthenticator() })
+	registerRefreshLead("flow", func() Authenticator { return NewFlowAuthenticator() })
 }
 
 func registerRefreshLead(provider string, factory func() Authenticator) {

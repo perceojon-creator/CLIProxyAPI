@@ -20,6 +20,7 @@ func newAuthManager() *sdkAuth.Manager {
 		sdkAuth.NewXAIAuthenticator(),
 		sdkAuth.NewKiroAuthenticator(),
 		sdkAuth.NewCopilotAuthenticator(),
+		sdkAuth.NewFlowAuthenticator(),
 	)
 	return manager
 }
