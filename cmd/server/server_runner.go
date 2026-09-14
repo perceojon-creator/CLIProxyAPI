@@ -84,7 +84,12 @@ func runTUIStandalone(
 		os.Stderr = devNull
 	}
 
+	var restored bool
 	restoreIO := func() {
+		if restored {
+			return
+		}
+		restored = true
 		os.Stdout = origStdout
 		os.Stderr = origStderr
 		log.SetOutput(origLogOutput)
@@ -92,6 +97,7 @@ func runTUIStandalone(
 			_ = devNull.Close()
 		}
 	}
+	defer restoreIO()
 
 	if password == "" {
 		password = fmt.Sprintf("tui-%d-%d", os.Getpid(), time.Now().UnixNano())

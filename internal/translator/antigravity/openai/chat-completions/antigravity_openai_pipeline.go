@@ -239,9 +239,9 @@ func processOpenAIUserContentItem(item gjson.Result, partItems [][]byte) [][]byt
 		}
 	case "image_url":
 		imageURL := item.Get("image_url.url").String()
-		if len(imageURL) > 5 {
+		if strings.HasPrefix(imageURL, "data:") {
 			pieces := strings.SplitN(imageURL[5:], ";", 2)
-			if len(pieces) == 2 && len(pieces[1]) > 7 {
+			if len(pieces) == 2 && strings.HasPrefix(pieces[1], "base64,") {
 				part := antigravityOpenAIInlineDataPart(pieces[0], pieces[1][7:], false)
 				part, _ = sjson.SetBytes(part, "thoughtSignature", antigravityFunctionThoughtSignature)
 				partItems = append(partItems, part)
@@ -249,9 +249,9 @@ func processOpenAIUserContentItem(item gjson.Result, partItems [][]byte) [][]byt
 		}
 	case "video_url":
 		videoURL := item.Get("video_url.url").String()
-		if len(videoURL) > 5 {
+		if strings.HasPrefix(videoURL, "data:") {
 			pieces := strings.SplitN(videoURL[5:], ";", 2)
-			if len(pieces) == 2 && len(pieces[1]) > 7 {
+			if len(pieces) == 2 && strings.HasPrefix(pieces[1], "base64,") {
 				partItems = append(partItems, antigravityOpenAIInlineDataPart(pieces[0], pieces[1][7:], false))
 			}
 		}
@@ -482,7 +482,12 @@ func formatOpenAIFunctionDeclaration(fn gjson.Result, functionNameMap map[string
 }
 
 func setDefaultSchemaFallback(fnRaw, fnName string) string {
-	fnRawBytes, errSet := sjson.SetBytes([]byte(fnRaw), "parametersJsonSchema.type", "object")
+	fnRawBytes := []byte(fnRaw)
+	if gjson.GetBytes(fnRawBytes, "parameters").Exists() {
+		fnRawBytes, _ = sjson.DeleteBytes(fnRawBytes, "parameters")
+	}
+	var errSet error
+	fnRawBytes, errSet = sjson.SetBytes(fnRawBytes, "parametersJsonSchema.type", "object")
 	if errSet != nil {
 		log.Warnf("Failed to set default schema type for tool '%s': %v", fnName, errSet)
 		return ""

@@ -185,7 +185,10 @@ func bootstrapConfig(
 	if configLoadedFromHome && homePluginStatusReady {
 		if errLoad := homeplugins.MarkLoadResults(&homePluginSyncReport, pluginHost); errLoad != nil {
 			log.Errorf("failed to load home plugins: %v", errLoad)
-			return nil, "", false, homeClient, errLoad
+			if homeClient != nil {
+				homeClient.Close()
+			}
+			return nil, "", false, nil, errLoad
 		}
 		if errReport := home.ReportPluginStatus(context.Background(), homeClient, cfg.Home.NodeID, homePluginSyncReport); errReport != nil {
 			log.Warnf("failed to report home plugin load status: %v", errReport)

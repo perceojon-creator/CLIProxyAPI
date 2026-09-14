@@ -12,31 +12,31 @@ import (
 
 // CLIOptions holds all parsed command-line flags for CLIProxyAPI.
 type CLIOptions struct {
-	CodexLogin                 bool
-	CodexDeviceLogin           bool
-	ClaudeLogin                bool
-	NoBrowser                  bool
-	OAuthCallbackPort          int
-	AntigravityLogin           bool
-	KimiLogin                  bool
-	XAILogin                   bool
-	KiroLogin                  bool
-	KiroLoginAll               bool
-	CopilotLogin               bool
-	CopilotLoginAll            bool
-	CopilotBrowserLogin        bool
-	FlowLogin                  bool
-	FlowLoginAll               bool
-	FlowSync                   bool
-	VertexImport               string
-	VertexImportPrefix         string
-	ConfigPath                 string
-	Password                   string
-	HomeJWT                    string
+	CodexLogin                  bool
+	CodexDeviceLogin            bool
+	ClaudeLogin                 bool
+	NoBrowser                   bool
+	OAuthCallbackPort           int
+	AntigravityLogin            bool
+	KimiLogin                   bool
+	XAILogin                    bool
+	KiroLogin                   bool
+	KiroLoginAll                bool
+	CopilotLogin                bool
+	CopilotLoginAll             bool
+	CopilotBrowserLogin         bool
+	FlowLogin                   bool
+	FlowLoginAll                bool
+	FlowSync                    bool
+	VertexImport                string
+	VertexImportPrefix          string
+	ConfigPath                  string
+	Password                    string
+	HomeJWT                     string
 	HomeDisableClusterDiscovery bool
-	TUIMode                    bool
-	Standalone                 bool
-	LocalModel                 bool
+	TUIMode                     bool
+	Standalone                  bool
+	LocalModel                  bool
 }
 
 // IsCommandMode returns true if any authentication, import, or sync command mode is active.
