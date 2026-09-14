@@ -1943,3 +1943,58 @@ func TestPrepareAntigravityGeminiReasoningReplayStillRejectsBrokenPairing(t *tes
 		t.Fatalf("error = %v, want structural pairing rejection", errPrepare)
 	}
 }
+
+func TestPrepareAntigravityGeminiReasoningReplayRepairsUnambiguousFunctionResponseID(t *testing.T) {
+	const model = "gemini-3.6-flash-high"
+	payload := []byte(`{"sessionId":"sess-mismatched-call-id","request":{"contents":[
+		{"role":"user","parts":[{"text":"start"}]},
+		{"role":"model","parts":[{"text":"working"}]},
+		{"role":"user","parts":[{"text":"continue"}]},
+		{"role":"model","parts":[{"text":"thinking"},{"text":"calling"},{"functionCall":{"id":"call_gMkJdd02PPXYAvVtUGQPIgQj","name":"run_command","args":{}}}]},
+		{"role":"user","parts":[{"functionResponse":{"id":"call_1789402087024498000_45","name":"run_command","response":{"result":"done"}}}]}
+	]}}`)
+
+	opts := cliproxyexecutor.Options{SourceFormat: sdktranslator.FromString("openai-responses")}
+	prepared, _, errPrepare := prepareAntigravityGeminiReasoningReplayPayload(
+		context.Background(),
+		model,
+		cliproxyexecutor.Request{Model: model, Payload: payload},
+		opts,
+		payload,
+	)
+	if errPrepare != nil {
+		t.Fatalf("mismatched functionResponse.id should be repaired: %v", errPrepare)
+	}
+	if got := gjson.GetBytes(prepared, "request.contents.4.parts.0.functionResponse.id").String(); got != "call_gMkJdd02PPXYAvVtUGQPIgQj" {
+		t.Fatalf("functionResponse.id = %q, want repaired call ID; payload=%s", got, prepared)
+	}
+	if errPairing := internalsignature.ValidateGeminiFunctionCallPairing(prepared); errPairing != nil {
+		t.Fatalf("repaired payload has invalid pairing: %v; payload=%s", errPairing, prepared)
+	}
+}
+
+func TestPrepareAntigravityGeminiReasoningReplayRejectsAmbiguousParallelFunctionResponseIDs(t *testing.T) {
+	const model = "gemini-3.6-flash-high"
+	payload := []byte(`{"sessionId":"sess-ambiguous-call-ids","request":{"contents":[
+		{"role":"user","parts":[{"text":"start"}]},
+		{"role":"model","parts":[
+			{"functionCall":{"id":"call_expected_1","name":"run_command","args":{"command":"one"}}},
+			{"functionCall":{"id":"call_expected_2","name":"run_command","args":{"command":"two"}}}
+		]},
+		{"role":"user","parts":[
+			{"functionResponse":{"id":"call_client_1","name":"run_command","response":{"result":"first"}}},
+			{"functionResponse":{"id":"call_client_2","name":"run_command","response":{"result":"second"}}}
+		]}
+	]}}`)
+
+	_, _, errPrepare := prepareAntigravityGeminiReasoningReplayPayload(
+		context.Background(),
+		model,
+		cliproxyexecutor.Request{Model: model, Payload: payload},
+		cliproxyexecutor.Options{SourceFormat: sdktranslator.FromString("openai-responses")},
+		payload,
+	)
+	if errPrepare == nil || !strings.Contains(errPrepare.Error(), "invalid Gemini function call history") {
+		t.Fatalf("ambiguous parallel ID mismatch should remain invalid, got %v", errPrepare)
+	}
+}

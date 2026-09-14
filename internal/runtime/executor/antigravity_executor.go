@@ -682,6 +682,188 @@ func normalizeAntigravityGeminiFunctionResponseRoles(rawJSON []byte) []byte {
 	return applyAntigravityIndexedEdits(rawJSON, edits, validOffsets)
 }
 
+// repairAntigravityGeminiFunctionResponseIDs aligns response IDs with the
+// preceding call group only when every response can be matched unambiguously.
+// Exact IDs take priority, then unique names, and finally a sole compatible
+// call/response pair. Ambiguous parallel groups are left unchanged so the
+// structural validator can reject them instead of attaching output to the
+// wrong tool call.
+func repairAntigravityGeminiFunctionResponseIDs(rawJSON []byte) []byte {
+	contents := util.GetGJSONBytesNoCopy(rawJSON, "request.contents")
+	if !contents.IsArray() {
+		return rawJSON
+	}
+	type functionRef struct {
+		id        string
+		name      string
+		part      gjson.Result
+		partIndex int64
+	}
+
+	edits := make([]antigravityContentEdit, 0)
+	var pending []functionRef
+	validOffsets := true
+	contents.ForEach(func(contentIndex, content gjson.Result) bool {
+		parts := content.Get("parts")
+		if !parts.IsArray() || !parts.Get("0").Exists() {
+			pending = nil
+			return true
+		}
+
+		var calls, responses []functionRef
+		hasOtherPart := false
+		parts.ForEach(func(partIndex, part gjson.Result) bool {
+			switch {
+			case part.Get("functionCall").Exists():
+				call := part.Get("functionCall")
+				calls = append(calls, functionRef{
+					id:        strings.TrimSpace(call.Get("id").String()),
+					name:      strings.TrimSpace(call.Get("name").String()),
+					part:      part,
+					partIndex: partIndex.Int(),
+				})
+			case part.Get("functionResponse").Exists():
+				response := part.Get("functionResponse")
+				responses = append(responses, functionRef{
+					id:        strings.TrimSpace(response.Get("id").String()),
+					name:      strings.TrimSpace(response.Get("name").String()),
+					part:      part,
+					partIndex: partIndex.Int(),
+				})
+			default:
+				hasOtherPart = true
+			}
+			return true
+		})
+		if len(calls) > 0 && len(responses) == 0 {
+			pending = calls
+			return true
+		}
+		if len(responses) == 0 {
+			if hasOtherPart {
+				pending = nil
+			}
+			return true
+		}
+		if len(calls) > 0 || len(pending) == 0 || len(responses) != len(pending) {
+			pending = nil
+			return true
+		}
+
+		assignments := make([]int, len(pending))
+		for callIndex := range assignments {
+			assignments[callIndex] = -1
+		}
+		usedResponses := make([]bool, len(responses))
+
+		// Preserve authoritative matches before considering repaired identities.
+		for callIndex, call := range pending {
+			if call.id == "" {
+				continue
+			}
+			matchIndex := -1
+			for responseIndex, response := range responses {
+				if usedResponses[responseIndex] || response.id != call.id {
+					continue
+				}
+				if matchIndex != -1 {
+					matchIndex = -1
+					break
+				}
+				matchIndex = responseIndex
+			}
+			if matchIndex != -1 {
+				assignments[callIndex] = matchIndex
+				usedResponses[matchIndex] = true
+			}
+		}
+
+		// Unique names safely recover reordered parallel responses.
+		for callIndex, call := range pending {
+			if assignments[callIndex] != -1 || call.name == "" || call.name == "unknown" {
+				continue
+			}
+			matchingCalls := 0
+			for otherCallIndex, otherCall := range pending {
+				if assignments[otherCallIndex] == -1 && otherCall.name == call.name {
+					matchingCalls++
+				}
+			}
+			matchIndex := -1
+			matchingResponses := 0
+			for responseIndex, response := range responses {
+				if !usedResponses[responseIndex] && response.name == call.name {
+					matchIndex = responseIndex
+					matchingResponses++
+				}
+			}
+			if matchingCalls == 1 && matchingResponses == 1 {
+				assignments[callIndex] = matchIndex
+				usedResponses[matchIndex] = true
+			}
+		}
+
+		unmatchedCallIndex := -1
+		unmatchedResponseIndex := -1
+		unmatchedCalls := 0
+		unmatchedResponses := 0
+		for callIndex := range pending {
+			if assignments[callIndex] == -1 {
+				unmatchedCallIndex = callIndex
+				unmatchedCalls++
+			}
+		}
+		for responseIndex := range responses {
+			if !usedResponses[responseIndex] {
+				unmatchedResponseIndex = responseIndex
+				unmatchedResponses++
+			}
+		}
+		if unmatchedCalls == 1 && unmatchedResponses == 1 {
+			call := pending[unmatchedCallIndex]
+			response := responses[unmatchedResponseIndex]
+			responseNameMissing := response.name == "" || response.name == "unknown"
+			if call.name != "" && call.name != "unknown" && (responseNameMissing || response.name == call.name) {
+				assignments[unmatchedCallIndex] = unmatchedResponseIndex
+				usedResponses[unmatchedResponseIndex] = true
+			}
+		}
+
+		for _, responseIndex := range assignments {
+			if responseIndex == -1 {
+				pending = nil
+				return true
+			}
+		}
+		for callIndex, responseIndex := range assignments {
+			call := pending[callIndex]
+			response := responses[responseIndex]
+			if call.id == "" || response.id == call.id {
+				continue
+			}
+			updatedPart, errSet := sjson.SetBytes([]byte(response.part.Raw), "functionResponse.id", call.id)
+			if errSet != nil {
+				continue
+			}
+			start := response.part.Index
+			end := start + len(response.part.Raw)
+			if start < 0 || end < start || end > len(rawJSON) || !bytes.Equal(rawJSON[start:end], []byte(response.part.Raw)) {
+				validOffsets = false
+			}
+			edits = append(edits, antigravityContentEdit{
+				index:       contentIndex.Int(),
+				path:        fmt.Sprintf("request.contents.%d.parts.%d", contentIndex.Int(), response.partIndex),
+				start:       start,
+				end:         end,
+				replacement: updatedPart,
+			})
+		}
+		pending = nil
+		return true
+	})
+	return applyAntigravityIndexedEdits(rawJSON, edits, validOffsets)
+}
+
 // applyAntigravityIndexedEdits splices collected JSON fragments into the original
 // request with one body copy. Applying SJSON once per field made large histories
 // scale with history size multiplied by the number of edits.

@@ -992,6 +992,39 @@ func TestNormalizeAntigravityGeminiFunctionResponseRolesDoesNotCrossEmptyContent
 	}
 }
 
+func TestRepairAntigravityGeminiFunctionResponseIDsRepairsSingleMismatch(t *testing.T) {
+	payload := []byte(`{"request":{"contents":[{"role":"model","parts":[{"functionCall":{"id":"call_gMkJdd02PPXYAvVtUGQPIgQj","name":"run_command","args":{}}}]},{"role":"user","parts":[{"functionResponse":{"id":"call_1789402087024498000_45","name":"run_command","response":{"result":"done"}}}]}]}}`)
+	output := normalizeAntigravityGeminiFunctionResponseRoles(repairAntigravityGeminiFunctionResponseIDs(payload))
+	if got := gjson.GetBytes(output, "request.contents.1.parts.0.functionResponse.id").String(); got != "call_gMkJdd02PPXYAvVtUGQPIgQj" {
+		t.Fatalf("functionResponse.id = %q, want call_gMkJdd02PPXYAvVtUGQPIgQj; output=%s", got, output)
+	}
+	if errValidate := internalsignature.ValidateGeminiFunctionCallPairing(output); errValidate != nil {
+		t.Fatalf("repaired single mismatched ID is invalid: %v; output=%s", errValidate, output)
+	}
+}
+
+func TestRepairAntigravityGeminiFunctionResponseIDsRepairsParallelUniqueNames(t *testing.T) {
+	payload := []byte(`{"request":{"contents":[{"role":"model","parts":[{"functionCall":{"id":"call-a","name":"read_file","args":{}}},{"functionCall":{"id":"call-b","name":"write_file","args":{}}}]},{"role":"user","parts":[{"functionResponse":{"id":"client-1","name":"write_file","response":{"ok":true}}},{"functionResponse":{"id":"client-2","name":"read_file","response":{"ok":true}}}]}]}}`)
+	output := normalizeAntigravityGeminiFunctionResponseRoles(repairAntigravityGeminiFunctionResponseIDs(payload))
+	if got := gjson.GetBytes(output, "request.contents.1.parts.0.functionResponse.id").String(); got != "call-a" {
+		t.Fatalf("first functionResponse.id = %q, want call-a; output=%s", got, output)
+	}
+	if got := gjson.GetBytes(output, "request.contents.1.parts.1.functionResponse.id").String(); got != "call-b" {
+		t.Fatalf("second functionResponse.id = %q, want call-b; output=%s", got, output)
+	}
+	if errValidate := internalsignature.ValidateGeminiFunctionCallPairing(output); errValidate != nil {
+		t.Fatalf("repaired parallel responses by unique name are invalid: %v; output=%s", errValidate, output)
+	}
+}
+
+func TestRepairAntigravityGeminiFunctionResponseIDsPreservesAmbiguousParallelSameName(t *testing.T) {
+	payload := []byte(`{"request":{"contents":[{"role":"model","parts":[{"functionCall":{"id":"call-a","name":"run_command","args":{}}},{"functionCall":{"id":"call-b","name":"run_command","args":{}}}]},{"role":"user","parts":[{"functionResponse":{"id":"client-1","name":"run_command","response":{"ok":true}}},{"functionResponse":{"id":"client-2","name":"run_command","response":{"ok":true}}}]}]}}`)
+	output := normalizeAntigravityGeminiFunctionResponseRoles(repairAntigravityGeminiFunctionResponseIDs(payload))
+	if errValidate := internalsignature.ValidateGeminiFunctionCallPairing(output); errValidate == nil {
+		t.Fatalf("ambiguous parallel same-name mismatch unexpectedly passed validation: output=%s", output)
+	}
+}
+
 func TestAntigravityExecutor_GeminiTargetPreservesGeminiThinkingCarrier(t *testing.T) {
 	inner := protowire.AppendTag(nil, 1, protowire.BytesType)
 	inner = protowire.AppendBytes(inner, []byte{0x01, 0x0c, 0x39, 0xd6, 0xc7, 0x34})

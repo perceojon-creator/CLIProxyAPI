@@ -596,3 +596,25 @@ func TestConvertOpenAIResponsesRequestToAntigravity_FunctionCallOutputAlternateI
 		t.Fatalf("functionResponse.id = %q, want call_bash_1", responseID)
 	}
 }
+
+func TestConvertOpenAIResponsesRequestToAntigravity_RejectsMismatchedFunctionResponseID(t *testing.T) {
+	inputJSON := []byte(`{
+		"model": "gemini-3.7-flash-high",
+		"input": [
+			{"role":"user","content":"continue"},
+			{"type":"function_call","call_id":"call_gMkJdd02PPXYAvVtUGQPIgQj","name":"run_command","arguments":"{}"},
+			{"type":"function_call_output","id":"call_1789402087024498000_45","output":"done"}
+		]
+	}`)
+
+	out := ConvertOpenAIResponsesRequestToAntigravity("gemini-3.7-flash-high", inputJSON, false)
+	rawRequest := gjson.GetBytes(out, "request").Raw
+	errPair := sigcompat.ValidateGeminiFunctionCallPairing([]byte(rawRequest))
+	if errPair == nil {
+		t.Fatal("mismatched functionResponse.id should fail Gemini pairing validation")
+	}
+	want := `functionResponse.id "call_1789402087024498000_45" does not match functionCall.id "call_gMkJdd02PPXYAvVtUGQPIgQj"`
+	if !strings.Contains(errPair.Error(), want) {
+		t.Fatalf("error = %v, want %q", errPair, want)
+	}
+}
