@@ -994,7 +994,7 @@ func (h *OpenAIResponsesAPIHandler) forwardResponsesStream(c *gin.Context, flush
 		},
 		WriteDone: func() {
 			framer.Flush(c.Writer)
-			_, _ = c.Writer.Write([]byte("\n"))
+			_, _ = c.Writer.Write(handlers.DefaultSSENewlineBytes)
 		},
 	})
 }

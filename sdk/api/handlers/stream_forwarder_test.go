@@ -82,3 +82,56 @@ func TestPendingStreamErrorIgnoresUnavailableErrors(t *testing.T) {
 		})
 	}
 }
+
+func TestDefaultSSEByteSlices(t *testing.T) {
+	if string(DefaultSSEKeepAliveBytes) != ": keep-alive\n\n" {
+		t.Fatalf("unexpected keep-alive bytes: %q", string(DefaultSSEKeepAliveBytes))
+	}
+	if string(DefaultSSEDoneBytes) != "data: [DONE]\n\n" {
+		t.Fatalf("unexpected done bytes: %q", string(DefaultSSEDoneBytes))
+	}
+	if string(DefaultSSENewlineBytes) != "\n" {
+		t.Fatalf("unexpected newline bytes: %q", string(DefaultSSENewlineBytes))
+	}
+	if string(DefaultSSEDoubleNewlineBytes) != "\n\n" {
+		t.Fatalf("unexpected double newline bytes: %q", string(DefaultSSEDoubleNewlineBytes))
+	}
+}
+
+type noopFlusherWriter struct {
+	*httptest.ResponseRecorder
+}
+
+func (n *noopFlusherWriter) Flush() {}
+
+func BenchmarkForwardStream(b *testing.B) {
+	gin.SetMode(gin.ReleaseMode)
+	chunkData := []byte("data: {\"choices\":[{\"delta\":{\"content\":\"token\"}}]}\n\n")
+
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		recorder := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(recorder)
+		c.Request = httptest.NewRequest(http.MethodGet, "/", nil)
+
+		data := make(chan []byte, 5)
+		data <- chunkData
+		data <- chunkData
+		data <- chunkData
+		close(data)
+
+		disabledKeepAlive := time.Duration(0)
+		h := &BaseAPIHandler{}
+		h.ForwardStream(c, &noopFlusherWriter{recorder}, func(error) {}, data, nil, StreamForwardOptions{
+			KeepAliveInterval: &disabledKeepAlive,
+			WriteChunk: func(chunk []byte) {
+				_, _ = c.Writer.Write(chunk)
+			},
+			WriteDone: func() {
+				_, _ = c.Writer.Write(DefaultSSEDoneBytes)
+			},
+		})
+	}
+}

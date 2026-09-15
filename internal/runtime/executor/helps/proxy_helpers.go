@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
@@ -11,6 +12,65 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/proxyutil"
 	log "github.com/sirupsen/logrus"
 )
+
+const (
+	// DefaultHighConcurrencyMaxIdleConns defines the aggregate idle connections pool size (512).
+	DefaultHighConcurrencyMaxIdleConns = 512
+
+	// DefaultHighConcurrencyMaxIdleConnsPerHost defines the maximum idle keep-alive connections per host (64).
+	DefaultHighConcurrencyMaxIdleConnsPerHost = 64
+
+	// DefaultHighConcurrencyIdleConnTimeout defines how long idle keep-alive connections remain open (90s).
+	DefaultHighConcurrencyIdleConnTimeout = 90 * time.Second
+)
+
+var (
+	directHighConcurrencyTransportOnce sync.Once
+	directHighConcurrencyTransport     *http.Transport
+)
+
+// TuneHighConcurrencyTransport tunes an existing HTTP transport for high-concurrency connection pooling.
+func TuneHighConcurrencyTransport(transport *http.Transport) {
+	if transport == nil {
+		return
+	}
+	if transport.MaxIdleConns < DefaultHighConcurrencyMaxIdleConns {
+		transport.MaxIdleConns = DefaultHighConcurrencyMaxIdleConns
+	}
+	if transport.MaxIdleConnsPerHost < DefaultHighConcurrencyMaxIdleConnsPerHost {
+		transport.MaxIdleConnsPerHost = DefaultHighConcurrencyMaxIdleConnsPerHost
+	}
+	if transport.IdleConnTimeout <= 0 {
+		transport.IdleConnTimeout = DefaultHighConcurrencyIdleConnTimeout
+	}
+}
+
+func getSharedDirectHighConcurrencyTransport() *http.Transport {
+	directHighConcurrencyTransportOnce.Do(func() {
+		if tr, ok := http.DefaultTransport.(*http.Transport); ok && tr != nil {
+			directHighConcurrencyTransport = tr.Clone()
+		} else {
+			directHighConcurrencyTransport = &http.Transport{}
+		}
+		directHighConcurrencyTransport.Proxy = nil
+		directHighConcurrencyTransport.ForceAttemptHTTP2 = true
+		TuneHighConcurrencyTransport(directHighConcurrencyTransport)
+	})
+	return directHighConcurrencyTransport
+}
+
+// NewHighConcurrencyHTTPClient creates an HTTP client tuned for high-concurrency pooling.
+// When direct connection is used (no proxy and no context RoundTripper), it provides
+// a shared direct transport with expanded MaxIdleConnsPerHost to prevent connection thrashing.
+func NewHighConcurrencyHTTPClient(ctx context.Context, cfg *config.Config, auth *cliproxyauth.Auth, timeout time.Duration) *http.Client {
+	client := NewProxyAwareHTTPClient(ctx, cfg, auth, timeout)
+	if client.Transport == nil {
+		client.Transport = getSharedDirectHighConcurrencyTransport()
+	} else if tr, ok := client.Transport.(*http.Transport); ok && tr != nil {
+		TuneHighConcurrencyTransport(tr)
+	}
+	return client
+}
 
 // NewProxyAwareHTTPClient creates an HTTP client with proper proxy configuration priority:
 // 1. Use auth.ProxyURL if configured (highest priority)
@@ -75,5 +135,6 @@ func buildProxyTransport(proxyURL string) *http.Transport {
 		log.Errorf("%v", errBuild)
 		return nil
 	}
+	TuneHighConcurrencyTransport(transport)
 	return transport
 }

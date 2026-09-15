@@ -8,6 +8,14 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/interfaces"
 )
 
+// Pre-allocated static byte slices for zero-allocation SSE streaming.
+var (
+	DefaultSSEKeepAliveBytes     = []byte(": keep-alive\n\n")
+	DefaultSSEDoneBytes          = []byte("data: [DONE]\n\n")
+	DefaultSSENewlineBytes       = []byte("\n")
+	DefaultSSEDoubleNewlineBytes = []byte("\n\n")
+)
+
 // PendingStreamError returns an immediately available non-nil stream error.
 func PendingStreamError(errs <-chan *interfaces.ErrorMessage) (*interfaces.ErrorMessage, bool) {
 	if errs == nil {
@@ -72,7 +80,7 @@ func (h *BaseAPIHandler) ForwardStream(c *gin.Context, flusher http.Flusher, can
 	writeKeepAlive := opts.WriteKeepAlive
 	if writeKeepAlive == nil {
 		writeKeepAlive = func() {
-			_, _ = c.Writer.Write([]byte(": keep-alive\n\n"))
+			_, _ = c.Writer.Write(DefaultSSEKeepAliveBytes)
 		}
 	}
 
