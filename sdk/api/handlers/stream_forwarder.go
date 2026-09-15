@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"net/http"
 	"time"
 
@@ -84,6 +85,19 @@ func (h *BaseAPIHandler) ForwardStream(c *gin.Context, flusher http.Flusher, can
 		}
 	}
 
+	flush := func() {
+		if flusher != nil {
+			flusher.Flush()
+		}
+	}
+
+	var reqCtx context.Context
+	if c.Request != nil && c.Request.Context() != nil {
+		reqCtx = c.Request.Context()
+	} else {
+		reqCtx = context.Background()
+	}
+
 	keepAliveInterval := StreamingKeepAliveInterval(h.Cfg)
 	if opts.KeepAliveInterval != nil {
 		keepAliveInterval = *opts.KeepAliveInterval
@@ -99,8 +113,8 @@ func (h *BaseAPIHandler) ForwardStream(c *gin.Context, flusher http.Flusher, can
 	var terminalErr *interfaces.ErrorMessage
 	for {
 		select {
-		case <-c.Request.Context().Done():
-			cancel(c.Request.Context().Err())
+		case <-reqCtx.Done():
+			cancel(reqCtx.Err())
 			return
 		case chunk, ok := <-data:
 			if !ok {
@@ -120,19 +134,19 @@ func (h *BaseAPIHandler) ForwardStream(c *gin.Context, flusher http.Flusher, can
 					if opts.WriteTerminalError != nil {
 						opts.WriteTerminalError(terminalErr)
 					}
-					flusher.Flush()
+					flush()
 					cancel(terminalErr.Error)
 					return
 				}
 				if opts.WriteDone != nil {
 					opts.WriteDone()
 				}
-				flusher.Flush()
+				flush()
 				cancel(nil)
 				return
 			}
 			writeChunk(chunk)
-			flusher.Flush()
+			flush()
 			if opts.ChunkError != nil {
 				chunkErr := opts.ChunkError()
 				if chunkErr != nil {
@@ -159,7 +173,7 @@ func (h *BaseAPIHandler) ForwardStream(c *gin.Context, flusher http.Flusher, can
 				}
 				if opts.WriteTerminalError != nil {
 					opts.WriteTerminalError(terminalErr)
-					flusher.Flush()
+					flush()
 				}
 			}
 			var execErr error
@@ -170,7 +184,7 @@ func (h *BaseAPIHandler) ForwardStream(c *gin.Context, flusher http.Flusher, can
 			return
 		case <-keepAliveC:
 			writeKeepAlive()
-			flusher.Flush()
+			flush()
 		}
 	}
 }

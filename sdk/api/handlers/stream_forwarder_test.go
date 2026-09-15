@@ -98,6 +98,102 @@ func TestDefaultSSEByteSlices(t *testing.T) {
 	}
 }
 
+func TestForwardStream_NilPointersAndEdgeCases(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	h := &BaseAPIHandler{}
+
+	t.Run("NilContextAndNilCancel", func(t *testing.T) {
+		// Should safely return without panic
+		h.ForwardStream(nil, nil, nil, nil, nil, StreamForwardOptions{})
+		recorder := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(recorder)
+		h.ForwardStream(c, nil, nil, nil, nil, StreamForwardOptions{})
+	})
+
+	t.Run("NilFlusherWithDataAndDone", func(t *testing.T) {
+		recorder := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(recorder)
+		c.Request = httptest.NewRequest(http.MethodGet, "/", nil)
+
+		data := make(chan []byte, 2)
+		data <- []byte("data: hello\n\n")
+		close(data)
+
+		disabledKeepAlive := time.Duration(0)
+		var canceled bool
+		h.ForwardStream(c, nil, func(err error) {
+			canceled = true
+			if err != nil {
+				t.Fatalf("unexpected cancel error: %v", err)
+			}
+		}, data, nil, StreamForwardOptions{
+			KeepAliveInterval: &disabledKeepAlive,
+			WriteChunk: func(chunk []byte) {
+				_, _ = c.Writer.Write(chunk)
+			},
+			WriteDone: func() {
+				_, _ = c.Writer.Write(DefaultSSEDoneBytes)
+			},
+		})
+
+		if !canceled {
+			t.Fatal("expected cancel callback to be invoked")
+		}
+		got := recorder.Body.String()
+		want := "data: hello\n\ndata: [DONE]\n\n"
+		if got != want {
+			t.Fatalf("body = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("NilRequestInGinContext", func(t *testing.T) {
+		recorder := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(recorder)
+		// c.Request is nil
+		data := make(chan []byte)
+		close(data)
+
+		disabledKeepAlive := time.Duration(0)
+		var canceled bool
+		h.ForwardStream(c, nil, func(err error) {
+			canceled = true
+		}, data, nil, StreamForwardOptions{
+			KeepAliveInterval: &disabledKeepAlive,
+		})
+
+		if !canceled {
+			t.Fatal("expected cancel to be called even with nil c.Request")
+		}
+	})
+
+	t.Run("ZeroLengthStreamImmediateClose", func(t *testing.T) {
+		recorder := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(recorder)
+		c.Request = httptest.NewRequest(http.MethodGet, "/", nil)
+
+		data := make(chan []byte)
+		close(data)
+
+		disabledKeepAlive := time.Duration(0)
+		var canceled bool
+		h.ForwardStream(c, nil, func(err error) {
+			canceled = true
+		}, data, nil, StreamForwardOptions{
+			KeepAliveInterval: &disabledKeepAlive,
+			WriteDone: func() {
+				_, _ = c.Writer.Write(DefaultSSEDoneBytes)
+			},
+		})
+
+		if !canceled {
+			t.Fatal("expected cancel callback to be invoked")
+		}
+		if got := recorder.Body.String(); got != "data: [DONE]\n\n" {
+			t.Fatalf("expected done bytes on zero-length stream, got %q", got)
+		}
+	})
+}
+
 type noopFlusherWriter struct {
 	*httptest.ResponseRecorder
 }
